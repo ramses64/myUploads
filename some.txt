@@ -1,42 +1,94 @@
-<script>
-async function sendViaMail() {
-  try {
-    const toEmail = document.getElementById("toEmail").value;
+using System.Net.Http.Headers;
+using System.Text;
+using System.Text.Json;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.Identity.Web;
 
-    const form = document.getElementById("sendForm");
-    const tokenInput = form.querySelector('input[name="__RequestVerificationToken"]');
-    if (!tokenInput) {
-      alert("Anti-forgery token not found in the form. Is @Html.AntiForgeryToken() rendered?");
-      return;
+namespace YourDmsWebApp.Controllers
+{
+    [Authorize]
+    public class MailController : Controller
+    {
+        private readonly ITokenAcquisition _tokenAcquisition;
+        private readonly IHttpClientFactory _httpClientFactory;
+
+        public MailController(
+            ITokenAcquisition tokenAcquisition,
+            IHttpClientFactory httpClientFactory)
+        {
+            _tokenAcquisition = tokenAcquisition;
+            _httpClientFactory = httpClientFactory;
+        }
+
+        /// <summary>
+        /// Creates a draft message via Microsoft Graph (no attachments)
+        /// and returns the Outlook compose deep link for that draft.
+        /// </summary>
+        [HttpPost]
+        [ValidateAntiForgeryToken]
+        public async Task<IActionResult> CreateDraftAndGetComposeLink([FromForm] string toEmail)
+        {
+            if (string.IsNullOrWhiteSpace(toEmail))
+                return BadRequest("Recipient email is required.");
+
+            // 1) Acquire Graph token (delegated, on behalf of signed-in user)
+            // Mail.ReadWrite is sufficient for creating drafts.
+            string[] scopes = new[] { "Mail.ReadWrite" };
+            var accessToken = await _tokenAcquisition.GetAccessTokenForUserAsync(scopes);
+
+            var http = _httpClientFactory.CreateClient();
+
+            // 2) Create the draft via POST /me/messages
+            var draftPayload = new
+            {
+                subject = "Your subject here",
+                body = new
+                {
+                    contentType = "HTML",
+                    content = "<p>Hello,</p><p>This is a draft email created via Microsoft Graph.</p>"
+                },
+                toRecipients = new[]
+                {
+                    new
+                    {
+                        emailAddress = new
+                        {
+                            address = toEmail
+                        }
+                    }
+                }
+            };
+
+            using var draftReq = new HttpRequestMessage(HttpMethod.Post, "https://graph.microsoft.com/v1.0/me/messages");
+            draftReq.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+            draftReq.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+            draftReq.Content = new StringContent(
+                JsonSerializer.Serialize(draftPayload),
+                Encoding.UTF8,
+                "application/json"
+            );
+
+            using var draftRes = await http.SendAsync(draftReq);
+            var draftJson = await draftRes.Content.ReadAsStringAsync();
+
+            if (!draftRes.IsSuccessStatusCode)
+                return StatusCode((int)draftRes.StatusCode, draftJson);
+
+            using var draftDoc = JsonDocument.Parse(draftJson);
+            var messageId = draftDoc.RootElement.GetProperty("id").GetString();
+
+            if (string.IsNullOrWhiteSpace(messageId))
+                return StatusCode(500, "Graph did not return a message id.");
+
+            // 3) Build compose deep link and return it
+            var composeLink = $"https://outlook.office365.com/mail/deeplink/compose/{messageId}?ItemID={messageId}&exvsurl=1";
+
+            return Json(new
+            {
+                messageId,
+                composeLink
+            });
+        }
     }
-
-    const token = tokenInput.value;
-
-    const body = new URLSearchParams();
-    body.append("__RequestVerificationToken", token);
-    body.append("toEmail", toEmail);
-
-    const res = await fetch("/Mail/CreateDraftAndGetComposeLink", {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body
-    });
-
-    const text = await res.text();   // <-- ALWAYS read body as text first
-    console.log("HTTP", res.status, res.statusText);
-    console.log("Response body:", text);
-
-    if (!res.ok) {
-      alert(`Error (HTTP ${res.status}):\n\n${text}`);
-      return;
-    }
-
-    const data = JSON.parse(text);
-    window.open(data.composeLink, "_blank");
-
-  } catch (e) {
-    console.error(e);
-    alert("Client-side error:\n\n" + (e?.message || e));
-  }
 }
-</script>
