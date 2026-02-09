@@ -1,42 +1,5 @@
-<script>
-async function sendViaMail() {
-  try {
-    const toEmail = document.getElementById("toEmail").value;
-
-    const form = document.getElementById("sendForm");
-    const tokenInput = form.querySelector('input[name="__RequestVerificationToken"]');
-    if (!tokenInput) {
-      alert("Anti-forgery token not found in the form. Is @Html.AntiForgeryToken() rendered?");
-      return;
-    }
-
-    const token = tokenInput.value;
-
-    const body = new URLSearchParams();
-    body.append("__RequestVerificationToken", token);
-    body.append("toEmail", toEmail);
-
-    const res = await fetch("/Mail/CreateDraftAndGetComposeLink", {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body
-    });
-
-    const text = await res.text();   // <-- ALWAYS read body as text first
-    console.log("HTTP", res.status, res.statusText);
-    console.log("Response body:", text);
-
-    if (!res.ok) {
-      alert(`Error (HTTP ${res.status}):\n\n${text}`);
-      return;
-    }
-
-    const data = JSON.parse(text);
-    window.open(data.composeLink, "_blank");
-
-  } catch (e) {
-    console.error(e);
-    alert("Client-side error:\n\n" + (e?.message || e));
-  }
-}
-</script>
+<form asp-controller="Mail" asp-action="CreateDraftAndOpenCompose" method="post">
+  @Html.AntiForgeryToken()
+  <input type="email" name="toEmail" placeholder="recipient@example.com" required />
+  <button type="submit">Send via mail</button>
+</form>
