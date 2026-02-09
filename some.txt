@@ -1,5 +1,150 @@
-Process.Start(new ProcessStartInfo
+using System.Net.Http.Headers;
+using System.Text;
+using System.Text.Json;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.Identity.Web;
+
+namespace YourDmsWebApp.Controllers
 {
-    FileName = "mailto:test@example.com?subject=Hello&body=Hi%20there",
-    UseShellExecute = true
-});
+    [Authorize]
+    public class MailController : Controller
+    {
+        private readonly ITokenAcquisition _tokenAcquisition;
+        private readonly IHttpClientFactory _httpClientFactory;
+
+        public MailController(
+            ITokenAcquisition tokenAcquisition,
+            IHttpClientFactory httpClientFactory)
+        {
+            _tokenAcquisition = tokenAcquisition;
+            _httpClientFactory = httpClientFactory;
+        }
+
+        /// <summary>
+        /// Example endpoint:
+        /// - Creates a draft message via Graph
+        /// - Adds an attachment (Base64) for files <= 3MB
+        /// - Returns the Outlook compose deep link for that draft
+        /// </summary>
+        [HttpPost]
+        [ValidateAntiForgeryToken]
+        public async Task<IActionResult> CreateDraftAndGetComposeLink([FromForm] string toEmail)
+        {
+            if (string.IsNullOrWhiteSpace(toEmail))
+                return BadRequest("Recipient email is required.");
+
+            // =========================
+            // 1) Get the document bytes (DEMO)
+            // Replace this with your real DMS fetch: documentId -> bytes + filename + contentType
+            // =========================
+            var fileName = "ExampleDocument.pdf";
+            var contentType = "application/pdf";
+
+            var demoPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", "sample.pdf");
+            if (!System.IO.File.Exists(demoPath))
+                return NotFound($"Demo file not found: {demoPath}");
+
+            byte[] fileBytes = await System.IO.File.ReadAllBytesAsync(demoPath);
+
+            // Graph simple attachment endpoint is limited (~3MB).
+            const int threeMb = 3 * 1024 * 1024;
+            if (fileBytes.Length > threeMb)
+            {
+                return BadRequest("File is > 3MB. Use the createUploadSession (large attachment) flow.");
+            }
+
+            // =========================
+            // 2) Acquire Graph token (delegated, on behalf of signed-in user)
+            // =========================
+            string[] scopes = new[] { "Mail.ReadWrite" };
+            var accessToken = await _tokenAcquisition.GetAccessTokenForUserAsync(scopes);
+
+            var http = _httpClientFactory.CreateClient();
+
+            // =========================
+            // 3) Create the draft via POST /me/messages
+            // =========================
+            var draftPayload = new
+            {
+                subject = "Your subject here",
+                body = new
+                {
+                    contentType = "HTML",
+                    content = "<p>Hello,</p><p>Please find the document attached.</p>"
+                },
+                toRecipients = new[]
+                {
+                    new
+                    {
+                        emailAddress = new
+                        {
+                            address = toEmail
+                        }
+                    }
+                }
+            };
+
+            using var draftReq = new HttpRequestMessage(HttpMethod.Post, "https://graph.microsoft.com/v1.0/me/messages");
+            draftReq.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+            draftReq.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+            draftReq.Content = new StringContent(
+                JsonSerializer.Serialize(draftPayload),
+                Encoding.UTF8,
+                "application/json"
+            );
+
+            using var draftRes = await http.SendAsync(draftReq);
+            var draftJson = await draftRes.Content.ReadAsStringAsync();
+
+            if (!draftRes.IsSuccessStatusCode)
+                return StatusCode((int)draftRes.StatusCode, draftJson);
+
+            using var draftDoc = JsonDocument.Parse(draftJson);
+            var messageId = draftDoc.RootElement.GetProperty("id").GetString();
+
+            if (string.IsNullOrWhiteSpace(messageId))
+                return StatusCode(500, "Graph did not return a message id.");
+
+            // =========================
+            // 4) Add attachment via POST /me/messages/{id}/attachments
+            //    (Solution 1: Dictionary for @odata.type)
+            // =========================
+            var attachmentPayload = new Dictionary<string, object>
+            {
+                ["@odata.type"] = "#microsoft.graph.fileAttachment",
+                ["name"] = fileName,
+                ["contentType"] = contentType,
+                ["contentBytes"] = Convert.ToBase64String(fileBytes)
+            };
+
+            var attachUrl = $"https://graph.microsoft.com/v1.0/me/messages/{messageId}/attachments";
+
+            using var attachReq = new HttpRequestMessage(HttpMethod.Post, attachUrl);
+            attachReq.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+            attachReq.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+            attachReq.Content = new StringContent(
+                JsonSerializer.Serialize(attachmentPayload),
+                Encoding.UTF8,
+                "application/json"
+            );
+
+            using var attachRes = await http.SendAsync(attachReq);
+            var attachJson = await attachRes.Content.ReadAsStringAsync();
+
+            if (!attachRes.IsSuccessStatusCode)
+                return StatusCode((int)attachRes.StatusCode, attachJson);
+
+            // =========================
+            // 5) Build compose deep link and return it
+            // =========================
+            var composeLink = $"https://outlook.office365.com/mail/deeplink/compose/{messageId}?ItemID={messageId}&exvsurl=1";
+
+            return Json(new
+            {
+                messageId,
+                composeLink
+            });
+        }
+    }
+}
