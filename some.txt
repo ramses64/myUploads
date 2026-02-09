@@ -1,36 +1,100 @@
-using Microsoft.AspNetCore.Authentication.OpenIdConnect;
+using System.Net.Http.Headers;
+using System.Text;
+using System.Text.Json;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.Identity.Web;
-using Microsoft.Identity.Web.UI;
 
-var builder = WebApplication.CreateBuilder(args);
+[Authorize]
+public class MailController : Controller
+{
+    private readonly ITokenAcquisition _tokenAcquisition;
+    private readonly IHttpClientFactory _httpClientFactory;
 
-builder.Services
-    .AddAuthentication(OpenIdConnectDefaults.AuthenticationScheme)
-    .AddMicrosoftIdentityWebApp(builder.Configuration.GetSection("AzureAd"))
-    // Enable token acquisition for calling downstream APIs (Graph) on behalf of the user
-    .EnableTokenAcquisitionToCallDownstreamApi()
-    .AddInMemoryTokenCaches();
+    public MailController(ITokenAcquisition tokenAcquisition, IHttpClientFactory httpClientFactory)
+    {
+        _tokenAcquisition = tokenAcquisition;
+        _httpClientFactory = httpClientFactory;
+    }
 
-builder.Services.AddControllersWithViews()
-    .AddMicrosoftIdentityUI();
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> CreateDraftAndGetComposeLink([FromForm] string toEmail)
+    {
+        // 1) Load the document bytes from your DMS (replace this with your real storage)
+        // Example: documentId passed in, you fetch bytes, filename, contentType.
+        var fileName = "ExampleDocument.pdf";
+        var contentType = "application/pdf";
+        byte[] fileBytes = await System.IO.File.ReadAllBytesAsync("wwwroot/sample.pdf"); // demo only
 
-builder.Services.AddAuthorization();
+        // 2) Acquire delegated token for Graph (user signed in)
+        // Mail.ReadWrite is required for drafts + attachments
+        string[] scopes = new[] { "Mail.ReadWrite" };
+        var accessToken = await _tokenAcquisition.GetAccessTokenForUserAsync(scopes);
 
-// For calling Graph
-builder.Services.AddHttpClient();
+        var http = _httpClientFactory.CreateClient();
 
-var app = builder.Build();
+        // 3) Create draft: POST /me/messages
+        var draftPayload = new
+        {
+            subject = "Your subject here",
+            body = new
+            {
+                contentType = "HTML",
+                content = "<p>Hello,</p><p>please find the document attached.</p>"
+            },
+            toRecipients = new[]
+            {
+                new { emailAddress = new { address = toEmail } }
+            }
+        };
 
-app.UseHttpsRedirection();
-app.UseStaticFiles();
+        using var draftReq = new HttpRequestMessage(HttpMethod.Post, "https://graph.microsoft.com/v1.0/me/messages");
+        draftReq.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+        draftReq.Content = new StringContent(JsonSerializer.Serialize(draftPayload), Encoding.UTF8, "application/json");
 
-app.UseRouting();
+        using var draftRes = await http.SendAsync(draftReq);
+        var draftJson = await draftRes.Content.ReadAsStringAsync();
 
-app.UseAuthentication();
-app.UseAuthorization();
+        if (!draftRes.IsSuccessStatusCode)
+            return StatusCode((int)draftRes.StatusCode, draftJson);
 
-app.MapControllerRoute(
-    name: "default",
-    pattern: "{controller=Home}/{action=Index}/{id?}");
+        using var doc = JsonDocument.Parse(draftJson);
+        var messageId = doc.RootElement.GetProperty("id").GetString();
 
-app.Run();
+        if (string.IsNullOrWhiteSpace(messageId))
+            return StatusCode(500, "Graph did not return a message id.");
+
+        // 4) Attach file (<= 3 MB) via POST /me/messages/{id}/attachments
+        // For > 3 MB you must use createUploadSession (see note below).
+        if (fileBytes.Length > 3 * 1024 * 1024)
+        {
+            return BadRequest("File is > 3 MB. Use createUploadSession flow for large attachments.");
+        }
+
+        var attachmentPayload = new
+        {
+            @odata.type = "#microsoft.graph.fileAttachment",
+            name = fileName,
+            contentType = contentType,
+            contentBytes = Convert.ToBase64String(fileBytes)
+        };
+
+        var attachUrl = $"https://graph.microsoft.com/v1.0/me/messages/{messageId}/attachments";
+
+        using var attachReq = new HttpRequestMessage(HttpMethod.Post, attachUrl);
+        attachReq.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+        attachReq.Content = new StringContent(JsonSerializer.Serialize(attachmentPayload), Encoding.UTF8, "application/json");
+
+        using var attachRes = await http.SendAsync(attachReq);
+        var attachJson = await attachRes.Content.ReadAsStringAsync();
+
+        if (!attachRes.IsSuccessStatusCode)
+            return StatusCode((int)attachRes.StatusCode, attachJson);
+
+        // 5) Build compose deep link (what your browser will open)
+        var composeLink = $"https://outlook.office365.com/mail/deeplink/compose/{messageId}?ItemID={messageId}&exvsurl=1";
+
+        return Json(new { messageId, composeLink });
+    }
+}
