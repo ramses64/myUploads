@@ -1,32 +1,36 @@
-@model IEnumerable<Microsoft.Graph.Message>
+using Microsoft.AspNetCore.Authentication.OpenIdConnect;
+using Microsoft.Identity.Web;
+using Microsoft.Identity.Web.UI;
 
-@{
-    ViewData["Title"] = "Inbox";
-}
+var builder = WebApplication.CreateBuilder(args);
 
-<h2>Inbox (Top 10)</h2>
+builder.Services
+    .AddAuthentication(OpenIdConnectDefaults.AuthenticationScheme)
+    .AddMicrosoftIdentityWebApp(builder.Configuration.GetSection("AzureAd"))
+    // Enable token acquisition for calling downstream APIs (Graph) on behalf of the user
+    .EnableTokenAcquisitionToCallDownstreamApi()
+    .AddInMemoryTokenCaches();
 
-<table class="table">
-    <thead>
-        <tr>
-            <th>Received</th>
-            <th>From</th>
-            <th>Subject</th>
-        </tr>
-    </thead>
-    <tbody>
-    @foreach (var m in Model)
-    {
-        <tr>
-            <td>@m.ReceivedDateTime</td>
-            <td>@m.From?.EmailAddress?.Address</td>
-            <td>@m.Subject</td>
-        </tr>
-    }
-    </tbody>
-</table>
+builder.Services.AddControllersWithViews()
+    .AddMicrosoftIdentityUI();
 
-<form asp-action="CreateDraftAndOpenOutlook" method="post">
-    @Html.AntiForgeryToken()
-    <button class="btn btn-primary" type="submit">Create draft + open in Outlook</button>
-</form>
+builder.Services.AddAuthorization();
+
+// For calling Graph
+builder.Services.AddHttpClient();
+
+var app = builder.Build();
+
+app.UseHttpsRedirection();
+app.UseStaticFiles();
+
+app.UseRouting();
+
+app.UseAuthentication();
+app.UseAuthorization();
+
+app.MapControllerRoute(
+    name: "default",
+    pattern: "{controller=Home}/{action=Index}/{id?}");
+
+app.Run();
