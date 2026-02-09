@@ -1,16 +1,5 @@
-using System;
-using System.Diagnostics;
-
-static void OpenDraft(string messageId)
+Process.Start(new ProcessStartInfo
 {
-    // Important: URL-encode the ID (these IDs often contain + / = etc.)
-    var id = Uri.EscapeDataString(messageId);
-
-    var url = $"https://outlook.office365.com/mail/deeplink/compose/{id}?ItemID={id}&exvsurl=1";
-
-    Process.Start(new ProcessStartInfo
-    {
-        FileName = url,
-        UseShellExecute = true
-    });
-}
+    FileName = "mailto:test@example.com?subject=Hello&body=Hi%20there",
+    UseShellExecute = true
+});
