@@ -1,78 +1,32 @@
-using Microsoft.AspNetCore.Authorization;
-using Microsoft.AspNetCore.Mvc;
-using Microsoft.Graph;
+@model IEnumerable<Microsoft.Graph.Message>
 
-namespace MvcGraphDemo.Controllers;
-
-[Authorize]
-public class GraphController : Controller
-{
-    private readonly GraphServiceClient _graph;
-
-    public GraphController(GraphServiceClient graph)
-    {
-        _graph = graph;
-    }
-
-    // 1) Simple learning endpoint: show top 10 inbox messages
-    public async Task<IActionResult> Inbox()
-    {
-        // Graph: list messages in signed-in user's mailbox
-        // https://learn.microsoft.com/graph/api/user-list-messages
-        var messages = await _graph.Me.Messages.GetAsync(config =>
-        {
-            config.QueryParameters.Top = 10;
-            config.QueryParameters.Select = new[] { "id", "subject", "from", "receivedDateTime" };
-            config.QueryParameters.Orderby = new[] { "receivedDateTime desc" };
-        });
-
-        return View(messages?.Value ?? new List<Message>());
-    }
-
-    // 2) Your target workflow: create draft + attachment, then redirect to Outlook compose deeplink
-    [HttpPost]
-    [ValidateAntiForgeryToken]
-    public async Task<IActionResult> CreateDraftAndOpenOutlook()
-    {
-        // Create a draft
-        var draft = new Message
-        {
-            Subject = "Hello from Microsoft Graph (draft)",
-            Body = new ItemBody
-            {
-                ContentType = BodyType.Html,
-                Content = "<p>This draft was created via Microsoft Graph from an ASP.NET Core MVC app.</p>"
-            },
-            ToRecipients = new List<Recipient>
-            {
-                new Recipient
-                {
-                    EmailAddress = new EmailAddress { Address = "someone@example.com" }
-                }
-            }
-        };
-
-        // POST /me/messages
-        var created = await _graph.Me.Messages.PostAsync(draft);
-
-        // Add a small text attachment (base64 -> byte[])
-        var fileBytes = System.Text.Encoding.UTF8.GetBytes("Hello! This is a demo attachment.");
-        var attachment = new FileAttachment
-        {
-            OdataType = "#microsoft.graph.fileAttachment",
-            Name = "demo.txt",
-            ContentType = "text/plain",
-            ContentBytes = fileBytes
-        };
-
-        // POST /me/messages/{id}/attachments
-        await _graph.Me.Messages[created!.Id].Attachments.PostAsync(attachment);
-
-        // Construct Outlook compose deep link
-        // Commonly used pattern (test in your environment)
-        var id = Uri.EscapeDataString(created.Id);
-        var deepLink = $"https://outlook.office365.com/mail/deeplink/compose/{id}?ItemID={id}&exvsurl=1";
-
-        return Redirect(deepLink);
-    }
+@{
+    ViewData["Title"] = "Inbox";
 }
+
+<h2>Inbox (Top 10)</h2>
+
+<table class="table">
+    <thead>
+        <tr>
+            <th>Received</th>
+            <th>From</th>
+            <th>Subject</th>
+        </tr>
+    </thead>
+    <tbody>
+    @foreach (var m in Model)
+    {
+        <tr>
+            <td>@m.ReceivedDateTime</td>
+            <td>@m.From?.EmailAddress?.Address</td>
+            <td>@m.Subject</td>
+        </tr>
+    }
+    </tbody>
+</table>
+
+<form asp-action="CreateDraftAndOpenOutlook" method="post">
+    @Html.AntiForgeryToken()
+    <button class="btn btn-primary" type="submit">Create draft + open in Outlook</button>
+</form>
