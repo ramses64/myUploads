@@ -1,35 +1,42 @@
-<form id="sendForm" method="post">
-  @Html.AntiForgeryToken()
-  <input type="email" id="toEmail" placeholder="recipient@example.com" required />
-  <button type="button" onclick="sendViaMail()">Send via mail</button>
-</form>
-
 <script>
 async function sendViaMail() {
-  const toEmail = document.getElementById("toEmail").value;
+  try {
+    const toEmail = document.getElementById("toEmail").value;
 
-  const form = document.getElementById("sendForm");
-  const token = form.querySelector('input[name="__RequestVerificationToken"]').value;
+    const form = document.getElementById("sendForm");
+    const tokenInput = form.querySelector('input[name="__RequestVerificationToken"]');
+    if (!tokenInput) {
+      alert("Anti-forgery token not found in the form. Is @Html.AntiForgeryToken() rendered?");
+      return;
+    }
 
-  const body = new URLSearchParams();
-  body.append("__RequestVerificationToken", token);
-  body.append("toEmail", toEmail);
+    const token = tokenInput.value;
 
-  const res = await fetch("/Mail/CreateDraftAndGetComposeLink", {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body
-  });
+    const body = new URLSearchParams();
+    body.append("__RequestVerificationToken", token);
+    body.append("toEmail", toEmail);
 
-  if (!res.ok) {
-    const errText = await res.text();
-    alert("Error:\n" + errText);
-    return;
+    const res = await fetch("/Mail/CreateDraftAndGetComposeLink", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body
+    });
+
+    const text = await res.text();   // <-- ALWAYS read body as text first
+    console.log("HTTP", res.status, res.statusText);
+    console.log("Response body:", text);
+
+    if (!res.ok) {
+      alert(`Error (HTTP ${res.status}):\n\n${text}`);
+      return;
+    }
+
+    const data = JSON.parse(text);
+    window.open(data.composeLink, "_blank");
+
+  } catch (e) {
+    console.error(e);
+    alert("Client-side error:\n\n" + (e?.message || e));
   }
-
-  const data = await res.json();
-
-  // This triggers Outlook/new Outlook (or web) depending on the user's environment
-  window.open(data.composeLink, "_blank");
 }
 </script>
