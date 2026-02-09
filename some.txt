@@ -1,40 +1,78 @@
-using Microsoft.AspNetCore.Authentication.OpenIdConnect;
-using Microsoft.Identity.Web;
-using Microsoft.Identity.Web.UI;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.Graph;
 
-var builder = WebApplication.CreateBuilder(args);
+namespace MvcGraphDemo.Controllers;
 
-// Auth + token acquisition for downstream APIs (Graph)
-builder.Services
-    .AddAuthentication(OpenIdConnectDefaults.AuthenticationScheme)
-    .AddMicrosoftIdentityWebApp(builder.Configuration.GetSection("AzureAd"))
-    .EnableTokenAcquisitionToCallDownstreamApi(
-        scopes: builder.Configuration["Graph:Scopes"]?.Split(' ', StringSplitOptions.RemoveEmptyEntries)
-    )
-    .AddMicrosoftGraph(builder.Configuration.GetSection("Graph"))
-    .AddInMemoryTokenCaches();
-
-builder.Services.AddControllersWithViews()
-    .AddMicrosoftIdentityUI();
-
-var app = builder.Build();
-
-if (!app.Environment.IsDevelopment())
+[Authorize]
+public class GraphController : Controller
 {
-    app.UseExceptionHandler("/Home/Error");
-    app.UseHsts();
+    private readonly GraphServiceClient _graph;
+
+    public GraphController(GraphServiceClient graph)
+    {
+        _graph = graph;
+    }
+
+    // 1) Simple learning endpoint: show top 10 inbox messages
+    public async Task<IActionResult> Inbox()
+    {
+        // Graph: list messages in signed-in user's mailbox
+        // https://learn.microsoft.com/graph/api/user-list-messages
+        var messages = await _graph.Me.Messages.GetAsync(config =>
+        {
+            config.QueryParameters.Top = 10;
+            config.QueryParameters.Select = new[] { "id", "subject", "from", "receivedDateTime" };
+            config.QueryParameters.Orderby = new[] { "receivedDateTime desc" };
+        });
+
+        return View(messages?.Value ?? new List<Message>());
+    }
+
+    // 2) Your target workflow: create draft + attachment, then redirect to Outlook compose deeplink
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> CreateDraftAndOpenOutlook()
+    {
+        // Create a draft
+        var draft = new Message
+        {
+            Subject = "Hello from Microsoft Graph (draft)",
+            Body = new ItemBody
+            {
+                ContentType = BodyType.Html,
+                Content = "<p>This draft was created via Microsoft Graph from an ASP.NET Core MVC app.</p>"
+            },
+            ToRecipients = new List<Recipient>
+            {
+                new Recipient
+                {
+                    EmailAddress = new EmailAddress { Address = "someone@example.com" }
+                }
+            }
+        };
+
+        // POST /me/messages
+        var created = await _graph.Me.Messages.PostAsync(draft);
+
+        // Add a small text attachment (base64 -> byte[])
+        var fileBytes = System.Text.Encoding.UTF8.GetBytes("Hello! This is a demo attachment.");
+        var attachment = new FileAttachment
+        {
+            OdataType = "#microsoft.graph.fileAttachment",
+            Name = "demo.txt",
+            ContentType = "text/plain",
+            ContentBytes = fileBytes
+        };
+
+        // POST /me/messages/{id}/attachments
+        await _graph.Me.Messages[created!.Id].Attachments.PostAsync(attachment);
+
+        // Construct Outlook compose deep link
+        // Commonly used pattern (test in your environment)
+        var id = Uri.EscapeDataString(created.Id);
+        var deepLink = $"https://outlook.office365.com/mail/deeplink/compose/{id}?ItemID={id}&exvsurl=1";
+
+        return Redirect(deepLink);
+    }
 }
-
-app.UseHttpsRedirection();
-app.UseStaticFiles();
-
-app.UseRouting();
-
-app.UseAuthentication();
-app.UseAuthorization();
-
-app.MapControllerRoute(
-    name: "default",
-    pattern: "{controller=Home}/{action=Index}/{id?}");
-
-app.Run();
