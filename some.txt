@@ -1,5 +1,5 @@
-<form asp-controller="Mail" asp-action="CreateDraftAndOpenCompose" method="post">
-  @Html.AntiForgeryToken()
-  <input type="email" name="toEmail" placeholder="recipient@example.com" required />
-  <button type="submit">Send via mail</button>
+<form action="/Mail/CreateDraftAndOpenCompose" method="post">
+    @Html.AntiForgeryToken()
+    <input type="email" name="toEmail" placeholder="recipient@example.com" required />
+    <button type="submit">Send via mail</button>
 </form>
