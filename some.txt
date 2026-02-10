@@ -1,45 +1,38 @@
-using System.Net.Http.Headers;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
 
-public interface ISentMailEmlExporter
+[Authorize]
+[Route("eml")]
+public class EmlController : Controller
 {
-    Task ExportMessageAsEmlAsync(string userId, string messageId);
-}
-
-public class SentMailEmlExporter : ISentMailEmlExporter
-{
-    private readonly IHttpClientFactory _httpClientFactory;
-    private readonly IAppGraphTokenProvider _tokenProvider;
     private readonly IWebHostEnvironment _env;
 
-    public SentMailEmlExporter(IHttpClientFactory httpClientFactory, IAppGraphTokenProvider tokenProvider, IWebHostEnvironment env)
+    public EmlController(IWebHostEnvironment env) => _env = env;
+
+    [HttpGet]
+    public IActionResult Index()
     {
-        _httpClientFactory = httpClientFactory;
-        _tokenProvider = tokenProvider;
-        _env = env;
+        var dir = Path.Combine(_env.ContentRootPath, "App_Data", "eml");
+        Directory.CreateDirectory(dir);
+
+        var files = Directory.GetFiles(dir, "*.eml")
+            .OrderByDescending(f => f)
+            .Select(Path.GetFileName)
+            .ToList();
+
+        return Ok(files); // replace with a view if you want
     }
 
-    public async Task ExportMessageAsEmlAsync(string userId, string messageId)
+    [HttpGet("{fileName}")]
+    public IActionResult Download(string fileName)
     {
-        var token = await _tokenProvider.GetAppTokenAsync();
-        var http = _httpClientFactory.CreateClient();
+        var dir = Path.Combine(_env.ContentRootPath, "App_Data", "eml");
+        var path = Path.Combine(dir, fileName);
 
-        // 1) Download MIME content (this is the .eml content) 
-        var mimeUrl = $"https://graph.microsoft.com/v1.0/users/{userId}/messages/{messageId}/$value";
+        if (!System.IO.File.Exists(path))
+            return NotFound();
 
-        using var req = new HttpRequestMessage(HttpMethod.Get, mimeUrl);
-        req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
-
-        using var res = await http.SendAsync(req);
-        if (!res.IsSuccessStatusCode)
-            return; // log in real app
-
-        var bytes = await res.Content.ReadAsByteArrayAsync();
-
-        // 2) Save to a folder (no DB). Put it somewhere safe/not web-accessible by default.
-        var outDir = Path.Combine(_env.ContentRootPath, "App_Data", "eml");
-        Directory.CreateDirectory(outDir);
-
-        var filePath = Path.Combine(outDir, $"{DateTime.UtcNow:yyyyMMdd-HHmmss}-{messageId}.eml");
-        await File.WriteAllBytesAsync(filePath, bytes);
+        var bytes = System.IO.File.ReadAllBytes(path);
+        return File(bytes, "message/rfc822", fileName);
     }
 }
