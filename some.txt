@@ -1,38 +1,41 @@
-using Microsoft.AspNetCore.Authorization;
-using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Authentication.OpenIdConnect;
+using Microsoft.Identity.Web;
+using Microsoft.Identity.Web.UI;
 
-[Authorize]
-[Route("eml")]
-public class EmlController : Controller
-{
-    private readonly IWebHostEnvironment _env;
+var builder = WebApplication.CreateBuilder(args);
 
-    public EmlController(IWebHostEnvironment env) => _env = env;
+builder.Services
+    .AddAuthentication(OpenIdConnectDefaults.AuthenticationScheme)
+    .AddMicrosoftIdentityWebApp(builder.Configuration.GetSection("AzureAd"))
+    // Enable token acquisition for calling downstream APIs (Graph) on behalf of the user
+    .EnableTokenAcquisitionToCallDownstreamApi()
+    .AddInMemoryTokenCaches();
 
-    [HttpGet]
-    public IActionResult Index()
-    {
-        var dir = Path.Combine(_env.ContentRootPath, "App_Data", "eml");
-        Directory.CreateDirectory(dir);
+builder.Services.AddControllersWithViews()
+    .AddMicrosoftIdentityUI();
 
-        var files = Directory.GetFiles(dir, "*.eml")
-            .OrderByDescending(f => f)
-            .Select(Path.GetFileName)
-            .ToList();
+builder.Services.AddAuthorization();
 
-        return Ok(files); // replace with a view if you want
-    }
+// For calling Graph (you already had this)
+builder.Services.AddHttpClient();
 
-    [HttpGet("{fileName}")]
-    public IActionResult Download(string fileName)
-    {
-        var dir = Path.Combine(_env.ContentRootPath, "App_Data", "eml");
-        var path = Path.Combine(dir, fileName);
+// ✅ Add these DI registrations (webhook/subscription/export)
+builder.Services.AddSingleton<IAppGraphTokenProvider, AppGraphTokenProvider>();
+builder.Services.AddScoped<IGraphSubscriptionService, GraphSubscriptionService>();
+builder.Services.AddScoped<ISentMailEmlExporter, SentMailEmlExporter>();
 
-        if (!System.IO.File.Exists(path))
-            return NotFound();
+var app = builder.Build();
 
-        var bytes = System.IO.File.ReadAllBytes(path);
-        return File(bytes, "message/rfc822", fileName);
-    }
-}
+app.UseHttpsRedirection();
+app.UseStaticFiles();
+
+app.UseRouting();
+
+app.UseAuthentication();
+app.UseAuthorization();
+
+app.MapControllerRoute(
+    name: "default",
+    pattern: "{controller=Home}/{action=Index}/{id?}");
+
+app.Run();
