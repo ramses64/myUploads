@@ -1,74 +1,27 @@
-using Microsoft.AspNetCore.Authentication.OpenIdConnect;
-using Microsoft.AspNetCore.HttpOverrides;
-using Microsoft.Identity.Web;
-using Microsoft.Identity.Web.UI;
+var resource = n.GetProperty("resource").GetString() ?? "";
+var resourceData = n.GetProperty("resourceData");
 
-var builder = WebApplication.CreateBuilder(args);
+// messageId
+var messageId = resourceData.TryGetProperty("id", out var idProp) ? idProp.GetString() : null;
 
-// =========================
-// Auth + token acquisition for Graph (delegated user)
-// =========================
-builder.Services
-    .AddAuthentication(OpenIdConnectDefaults.AuthenticationScheme)
-    .AddMicrosoftIdentityWebApp(builder.Configuration.GetSection("AzureAd"))
-    .EnableTokenAcquisitionToCallDownstreamApi()
-    .AddInMemoryTokenCaches();
+// userId: try resourceData first
+var userId = resourceData.TryGetProperty("userId", out var userProp) ? userProp.GetString() : null;
 
-// MVC + Microsoft Identity UI
-builder.Services.AddControllersWithViews()
-    .AddMicrosoftIdentityUI();
-
-builder.Services.AddAuthorization();
-
-// HttpClient for Graph calls
-builder.Services.AddHttpClient();
-
-// =========================
-// Dev Tunnel / Reverse proxy fixes (Correlation Failed)
-// =========================
-builder.Services.Configure<ForwardedHeadersOptions>(options =>
+// fallback: parse from resource: "users/{userId}/mailFolders('SentItems')/messages/{messageId}"
+if (string.IsNullOrWhiteSpace(userId))
 {
-    options.ForwardedHeaders = ForwardedHeaders.XForwardedProto | ForwardedHeaders.XForwardedHost;
+    const string prefix = "users/";
+    var start = resource.IndexOf(prefix, StringComparison.OrdinalIgnoreCase);
+    if (start >= 0)
+    {
+        start += prefix.Length;
+        var end = resource.IndexOf('/', start);
+        if (end > start)
+            userId = resource.Substring(start, end - start);
+    }
+}
 
-    // Dev tunnels use unknown proxy addresses; relax checks for dev.
-    // For production, configure KnownProxies/KnownNetworks explicitly.
-    options.KnownNetworks.Clear();
-    options.KnownProxies.Clear();
-});
-
-// =========================
-// Your DI registrations
-// =========================
-builder.Services.AddSingleton<IAppGraphTokenProvider, AppGraphTokenProvider>();
-builder.Services.AddScoped<IGraphSubscriptionService, GraphSubscriptionService>();
-builder.Services.AddScoped<ISentMailEmlExporter, SentMailEmlExporter>();
-
-var app = builder.Build();
-
-app.UseHttpsRedirection();
-app.UseStaticFiles();
-
-app.UseRouting();
-
-// IMPORTANT: forwarded headers must be applied before auth/cookies
-app.UseForwardedHeaders();
-
-// IMPORTANT: cookie policy for OIDC cross-site redirect (login.microsoftonline.com -> your app)
-app.UseCookiePolicy(new CookiePolicyOptions
+if (!string.IsNullOrWhiteSpace(userId) && !string.IsNullOrWhiteSpace(messageId))
 {
-    MinimumSameSitePolicy = SameSiteMode.None,
-    Secure = CookieSecurePolicy.Always
-});
-
-app.UseAuthentication();
-app.UseAuthorization();
-
-// Attribute routing (needed for webhook controller like [Route("graph/notifications")])
-app.MapControllers();
-
-// Conventional MVC routing
-app.MapControllerRoute(
-    name: "default",
-    pattern: "{controller=Home}/{action=Index}/{id?}");
-
-app.Run();
+    await _exporter.ExportMessageAsEmlAsync(userId!, messageId!);
+}
