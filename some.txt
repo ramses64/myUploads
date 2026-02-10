@@ -1,71 +1,45 @@
-using Microsoft.AspNetCore.Mvc;
-using System.Text.Json;
+using System.Net.Http.Headers;
 
-[ApiController]
-[Route("graph/notifications")]
-public class GraphNotificationsController : ControllerBase
+public interface ISentMailEmlExporter
 {
-    private readonly IConfiguration _config;
-    private readonly ISentMailEmlExporter _exporter;
+    Task ExportMessageAsEmlAsync(string userId, string messageId);
+}
 
-    public GraphNotificationsController(IConfiguration config, ISentMailEmlExporter exporter)
+public class SentMailEmlExporter : ISentMailEmlExporter
+{
+    private readonly IHttpClientFactory _httpClientFactory;
+    private readonly IAppGraphTokenProvider _tokenProvider;
+    private readonly IWebHostEnvironment _env;
+
+    public SentMailEmlExporter(IHttpClientFactory httpClientFactory, IAppGraphTokenProvider tokenProvider, IWebHostEnvironment env)
     {
-        _config = config;
-        _exporter = exporter;
+        _httpClientFactory = httpClientFactory;
+        _tokenProvider = tokenProvider;
+        _env = env;
     }
 
-    // Validation: Graph expects you to echo validationToken as plain text.
-    [HttpGet]
-    public IActionResult Validate([FromQuery] string validationToken)
+    public async Task ExportMessageAsEmlAsync(string userId, string messageId)
     {
-        if (string.IsNullOrWhiteSpace(validationToken))
-            return BadRequest();
+        var token = await _tokenProvider.GetAppTokenAsync();
+        var http = _httpClientFactory.CreateClient();
 
-        return Content(validationToken, "text/plain");
-    }
+        // 1) Download MIME content (this is the .eml content) 
+        var mimeUrl = $"https://graph.microsoft.com/v1.0/users/{userId}/messages/{messageId}/$value";
 
-    [HttpPost]
-    public async Task<IActionResult> Post([FromQuery] string? validationToken)
-    {
-        // Some Graph flows validate using POST + validationToken query.
-        if (!string.IsNullOrWhiteSpace(validationToken))
-            return Content(validationToken, "text/plain");
+        using var req = new HttpRequestMessage(HttpMethod.Get, mimeUrl);
+        req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
 
-        using var reader = new StreamReader(Request.Body);
-        var json = await reader.ReadToEndAsync();
-        if (string.IsNullOrWhiteSpace(json))
-            return Ok();
+        using var res = await http.SendAsync(req);
+        if (!res.IsSuccessStatusCode)
+            return; // log in real app
 
-        using var doc = JsonDocument.Parse(json);
+        var bytes = await res.Content.ReadAsByteArrayAsync();
 
-        if (!doc.RootElement.TryGetProperty("value", out var value) || value.ValueKind != JsonValueKind.Array)
-            return Ok();
+        // 2) Save to a folder (no DB). Put it somewhere safe/not web-accessible by default.
+        var outDir = Path.Combine(_env.ContentRootPath, "App_Data", "eml");
+        Directory.CreateDirectory(outDir);
 
-        var expectedClientState = _config["Graph:ClientStateSecret"];
-
-        foreach (var n in value.EnumerateArray())
-        {
-            // Basic security: verify clientState
-            var clientState = n.GetProperty("clientState").GetString();
-            if (!string.Equals(clientState, expectedClientState, StringComparison.Ordinal))
-                continue;
-
-            // resource example: "users/{userId}/mailFolders('SentItems')/messages/{messageId}"
-            var resource = n.GetProperty("resource").GetString() ?? "";
-            var resourceData = n.GetProperty("resourceData");
-
-            // resourceData.id is typically present
-            var messageId = resourceData.TryGetProperty("id", out var idProp) ? idProp.GetString() : null;
-
-            // userId can be extracted from resourceData.userId or the resource string depending on payload
-            var userId = resourceData.TryGetProperty("userId", out var userProp) ? userProp.GetString() : null;
-
-            if (!string.IsNullOrWhiteSpace(userId) && !string.IsNullOrWhiteSpace(messageId))
-            {
-                await _exporter.ExportMessageAsEmlAsync(userId!, messageId!);
-            }
-        }
-
-        return Ok();
+        var filePath = Path.Combine(outDir, $"{DateTime.UtcNow:yyyyMMdd-HHmmss}-{messageId}.eml");
+        await File.WriteAllBytesAsync(filePath, bytes);
     }
 }
