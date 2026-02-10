@@ -1,1 +1,2 @@
-i still dont know how to solve the problem with "var accessToken = await _tokenAcquisition.GetAccessTokenForUserAsync(scopes);": i noticed sth while i was debugging...when i click send via mail the first time, this line threw an exception: "var accessToken = await _tokenAcquisition.GetAccessTokenForUserAsync(scopes);" Microsoft.Identity.Web.MicrosoftIdentitiyWebChallengeUserException...and then 405 was the response code somehow...after the second click on send via mail, there was no exception for the same line and he was somehow able to get the accessToken...
+var composeLink =
+    $"https://outlook.office365.com/mail/deeplink/compose/{messageId}?ItemID={messageId}&exvsurl=1&popoutv2=1";
