@@ -1,24 +1,71 @@
-using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using System.Security.Claims;
+using System.Text.Json;
 
-[Authorize]
-[Route("graph")]
-public class GraphSetupController : Controller
+[ApiController]
+[Route("graph/notifications")]
+public class GraphNotificationsController : ControllerBase
 {
-    private readonly IGraphSubscriptionService _subs;
+    private readonly IConfiguration _config;
+    private readonly ISentMailEmlExporter _exporter;
 
-    public GraphSetupController(IGraphSubscriptionService subs) => _subs = subs;
-
-    [HttpPost("subscribe-sentitems")]
-    [ValidateAntiForgeryToken]
-    public async Task<IActionResult> SubscribeSentItems()
+    public GraphNotificationsController(IConfiguration config, ISentMailEmlExporter exporter)
     {
-        // You need the user's AAD object id or UPN email. Object id is best.
-        var userId = User.FindFirstValue("http://schemas.microsoft.com/identity/claims/objectidentifier")
-                     ?? throw new InvalidOperationException("No object id claim.");
+        _config = config;
+        _exporter = exporter;
+    }
 
-        var subId = await _subs.EnsureSubscriptionAsync(userId);
-        return Ok(new { subscriptionId = subId });
+    // Validation: Graph expects you to echo validationToken as plain text.
+    [HttpGet]
+    public IActionResult Validate([FromQuery] string validationToken)
+    {
+        if (string.IsNullOrWhiteSpace(validationToken))
+            return BadRequest();
+
+        return Content(validationToken, "text/plain");
+    }
+
+    [HttpPost]
+    public async Task<IActionResult> Post([FromQuery] string? validationToken)
+    {
+        // Some Graph flows validate using POST + validationToken query.
+        if (!string.IsNullOrWhiteSpace(validationToken))
+            return Content(validationToken, "text/plain");
+
+        using var reader = new StreamReader(Request.Body);
+        var json = await reader.ReadToEndAsync();
+        if (string.IsNullOrWhiteSpace(json))
+            return Ok();
+
+        using var doc = JsonDocument.Parse(json);
+
+        if (!doc.RootElement.TryGetProperty("value", out var value) || value.ValueKind != JsonValueKind.Array)
+            return Ok();
+
+        var expectedClientState = _config["Graph:ClientStateSecret"];
+
+        foreach (var n in value.EnumerateArray())
+        {
+            // Basic security: verify clientState
+            var clientState = n.GetProperty("clientState").GetString();
+            if (!string.Equals(clientState, expectedClientState, StringComparison.Ordinal))
+                continue;
+
+            // resource example: "users/{userId}/mailFolders('SentItems')/messages/{messageId}"
+            var resource = n.GetProperty("resource").GetString() ?? "";
+            var resourceData = n.GetProperty("resourceData");
+
+            // resourceData.id is typically present
+            var messageId = resourceData.TryGetProperty("id", out var idProp) ? idProp.GetString() : null;
+
+            // userId can be extracted from resourceData.userId or the resource string depending on payload
+            var userId = resourceData.TryGetProperty("userId", out var userProp) ? userProp.GetString() : null;
+
+            if (!string.IsNullOrWhiteSpace(userId) && !string.IsNullOrWhiteSpace(messageId))
+            {
+                await _exporter.ExportMessageAsEmlAsync(userId!, messageId!);
+            }
+        }
+
+        return Ok();
     }
 }
