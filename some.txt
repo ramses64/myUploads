@@ -1,27 +1,34 @@
-var resource = n.GetProperty("resource").GetString() ?? "";
-var resourceData = n.GetProperty("resourceData");
-
-// messageId
-var messageId = resourceData.TryGetProperty("id", out var idProp) ? idProp.GetString() : null;
-
-// userId: try resourceData first
-var userId = resourceData.TryGetProperty("userId", out var userProp) ? userProp.GetString() : null;
-
-// fallback: parse from resource: "users/{userId}/mailFolders('SentItems')/messages/{messageId}"
-if (string.IsNullOrWhiteSpace(userId))
+[Authorize]
+[Route("graph")]
+public class GraphDebugController : Controller
 {
-    const string prefix = "users/";
-    var start = resource.IndexOf(prefix, StringComparison.OrdinalIgnoreCase);
-    if (start >= 0)
+    private readonly IAppGraphTokenProvider _tokenProvider;
+    private readonly IHttpClientFactory _httpClientFactory;
+
+    public GraphDebugController(
+        IAppGraphTokenProvider tokenProvider,
+        IHttpClientFactory httpClientFactory)
     {
-        start += prefix.Length;
-        var end = resource.IndexOf('/', start);
-        if (end > start)
-            userId = resource.Substring(start, end - start);
+        _tokenProvider = tokenProvider;
+        _httpClientFactory = httpClientFactory;
     }
-}
 
-if (!string.IsNullOrWhiteSpace(userId) && !string.IsNullOrWhiteSpace(messageId))
-{
-    await _exporter.ExportMessageAsEmlAsync(userId!, messageId!);
+    [HttpGet("subscriptions")]
+    public async Task<IActionResult> ListSubscriptions()
+    {
+        var token = await _tokenProvider.GetAppTokenAsync();
+        var http = _httpClientFactory.CreateClient();
+
+        using var req = new HttpRequestMessage(
+            HttpMethod.Get,
+            "https://graph.microsoft.com/v1.0/subscriptions");
+
+        req.Headers.Authorization =
+            new AuthenticationHeaderValue("Bearer", token);
+
+        using var res = await http.SendAsync(req);
+        var body = await res.Content.ReadAsStringAsync();
+
+        return Content(body, "application/json");
+    }
 }
