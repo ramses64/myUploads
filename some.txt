@@ -1,122 +1,50 @@
-<script>
-    function setStatus(el, msg, kind) {
-        el.classList.remove("show", "ok", "error");
-        if (!msg) return;
-        el.textContent = msg;
-        el.classList.add("show");
-        if (kind) el.classList.add(kind);
-    }
+using System;
+using System.Windows;
+using System.Windows.Interop;
 
-    let lastSignature = null;
-    let timerId = null;
+namespace WpfApp1
+{
+    public partial class MainWindow : Window
+    {
+        private OutlookAsyncDropTarget _dropTarget;
 
-    function signatureOf(files) {
-        // Stable signature so we can detect changes without re-rendering
-        // (works fine since your filenames are unique and stable)
-        return Array.isArray(files) ? files.join("|") : "";
-    }
-
-    function renderFiles(files) {
-        const listEl = document.getElementById("emlList");
-        const emptyEl = document.getElementById("emlEmpty");
-
-        listEl.innerHTML = "";
-        emptyEl.style.display = "none";
-
-        if (!files || files.length === 0) {
-            emptyEl.style.display = "block";
-            return;
+        public MainWindow()
+        {
+            InitializeComponent();
         }
 
-        for (const f of files) {
-            const item = document.createElement("div");
-            item.className = "file-item";
+        protected override void OnSourceInitialized(EventArgs e)
+        {
+            base.OnSourceInitialized(e);
 
-            const left = document.createElement("div");
-            left.className = "file-name";
+            // Get native window handle
+            var hwnd = new WindowInteropHelper(this).Handle;
 
-            const name = document.createElement("strong");
-            name.textContent = f;
+            _dropTarget = new OutlookAsyncDropTarget(hwnd, AddPathsToUi);
 
-            const meta = document.createElement("span");
-            meta.textContent = "Download and open in Outlook / Mail clients";
-
-            left.appendChild(name);
-            left.appendChild(meta);
-
-            const link = document.createElement("a");
-            link.className = "btn";
-            link.href = "/eml/" + encodeURIComponent(f);
-            link.textContent = "Download";
-
-            item.appendChild(left);
-            item.appendChild(link);
-
-            listEl.appendChild(item);
+            int hr = Ole32.RegisterDragDrop(hwnd, _dropTarget);
+            if (hr != 0)
+            {
+                MessageBox.Show($"RegisterDragDrop failed: 0x{hr:X8}");
+            }
         }
-    }
 
-    async function loadEmlFiles({ silent = false } = {}) {
-        const status = document.getElementById("emlStatus");
+        protected override void OnClosed(EventArgs e)
+        {
+            var hwnd = new WindowInteropHelper(this).Handle;
+            Ole32.RevokeDragDrop(hwnd);
+            base.OnClosed(e);
+        }
 
-        if (!silent) setStatus(status, "Listening for new .eml files…");
-
-        try {
-            const res = await fetch("/eml", {
-                headers: { "Accept": "application/json" },
-                cache: "no-store" // important so browser doesn't cache /eml
+        private void AddPathsToUi(string[] paths)
+        {
+            Dispatcher.Invoke(() =>
+            {
+                foreach (var p in paths)
+                {
+                    MyListBox.Items.Add(p);
+                }
             });
-
-            if (!res.ok) {
-                const t = await res.text();
-                setStatus(status, "Could not load .eml files: " + t, "error");
-                return;
-            }
-
-            const files = await res.json();
-
-            // Optional: if your backend returns oldest-first, you can reverse here:
-            // files.reverse();
-
-            const sig = signatureOf(files);
-            if (sig !== lastSignature) {
-                lastSignature = sig;
-                renderFiles(files);
-                setStatus(status, "Updated.", "ok");
-                // Hide the "Updated" message after a short moment
-                setTimeout(() => setStatus(status, ""), 1200);
-            } else {
-                // no change; keep it quiet
-                setStatus(status, "");
-            }
-        } catch (e) {
-            setStatus(status, "Error loading .eml files: " + e, "error");
         }
     }
-
-    function startAutoRefresh() {
-        // First load immediately
-        loadEmlFiles({ silent: false });
-
-        // Then poll periodically (tune the interval as you like)
-        timerId = setInterval(() => loadEmlFiles({ silent: true }), 3000);
-
-        // If user switches tab, reduce load (optional)
-        document.addEventListener("visibilitychange", () => {
-            if (document.hidden) {
-                if (timerId) clearInterval(timerId);
-                timerId = null;
-            } else if (!timerId) {
-                timerId = setInterval(() => loadEmlFiles({ silent: true }), 3000);
-                loadEmlFiles({ silent: true });
-            }
-        });
-    }
-
-    document.addEventListener("DOMContentLoaded", startAutoRefresh);
-</script>
-
-<div class="pill" title="This page checks for new .eml files automatically.">
-    <span>🟢</span>
-    <span>Live updates</span>
-</div>
+}
