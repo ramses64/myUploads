@@ -1,446 +1,441 @@
+@* Index.cshtml *@
 @{
-    ViewData["Title"] = "Mail Draft + EML Archive";
+    ViewData["Title"] = "Mail Composer";
+    // Expect one of these to be provided by your controller:
+    // 1) ViewBag.EmlFiles = IEnumerable<string> of file names
+    //    OR
+    // 2) Model = IEnumerable<string> of file names
+    //
+    // We'll support both:
+    var emlFiles = (IEnumerable<string>?)ViewBag.EmlFiles ?? (Model as IEnumerable<string>) ?? Enumerable.Empty<string>();
 }
 
 <style>
     :root{
-        --bg: #0b1220;
-        --card: rgba(255,255,255,.06);
-        --card2: rgba(255,255,255,.08);
-        --border: rgba(255,255,255,.12);
-        --text: rgba(255,255,255,.92);
-        --muted: rgba(255,255,255,.70);
-        --muted2: rgba(255,255,255,.55);
-        --accent: #7c3aed;   /* violet */
-        --accent2:#22c55e;   /* green */
+        --bg1:#0b1020;
+        --bg2:#0f172a;
+        --card: rgba(255,255,255,.08);
+        --card2: rgba(255,255,255,.06);
+        --stroke: rgba(255,255,255,.12);
+        --text:#e5e7eb;
+        --muted:#a1a1aa;
+        --accent:#7c3aed;
+        --accent2:#22c55e;
         --danger:#ef4444;
-        --shadow: 0 20px 60px rgba(0,0,0,.45);
-        --shadow2: 0 10px 30px rgba(0,0,0,.35);
+        --shadow: 0 20px 50px rgba(0,0,0,.35);
         --radius: 18px;
-        --radius2: 12px;
-        --ring: 0 0 0 4px rgba(124,58,237,.25);
-        --font: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji","Segoe UI Emoji";
     }
 
     body{
         background:
-            radial-gradient(1200px 600px at 20% -10%, rgba(124,58,237,.35), transparent 60%),
-            radial-gradient(900px 500px at 85% 10%, rgba(34,197,94,.25), transparent 55%),
-            radial-gradient(800px 600px at 50% 120%, rgba(59,130,246,.18), transparent 60%),
-            var(--bg);
+            radial-gradient(1000px 600px at 20% 0%, rgba(124,58,237,.28), transparent 55%),
+            radial-gradient(900px 500px at 90% 10%, rgba(34,197,94,.18), transparent 55%),
+            linear-gradient(180deg, var(--bg1), var(--bg2));
         color: var(--text);
-        font-family: var(--font);
     }
 
     .page-wrap{
         max-width: 1100px;
-        margin: 40px auto;
-        padding: 0 18px 60px;
+        margin: 0 auto;
+        padding: 38px 18px 60px;
     }
 
     .hero{
         display:flex;
-        align-items:flex-end;
+        gap:18px;
+        align-items:flex-start;
         justify-content:space-between;
-        gap: 18px;
         margin-bottom: 18px;
     }
 
     .hero h1{
-        margin: 0;
-        font-size: 30px;
-        letter-spacing: .2px;
+        font-size: clamp(24px, 3vw, 34px);
+        margin: 0 0 6px 0;
+        letter-spacing:-.02em;
     }
+
     .hero p{
-        margin: 10px 0 0;
+        margin: 0;
         color: var(--muted);
-        max-width: 720px;
         line-height: 1.5;
+        max-width: 720px;
     }
 
     .pill{
         display:inline-flex;
-        gap: 8px;
         align-items:center;
-        padding: 8px 12px;
-        border: 1px solid var(--border);
-        background: rgba(255,255,255,.06);
+        gap:8px;
+        padding: 10px 12px;
         border-radius: 999px;
-        color: var(--muted);
+        background: rgba(255,255,255,.06);
+        border: 1px solid var(--stroke);
+        box-shadow: 0 8px 25px rgba(0,0,0,.18);
         font-size: 13px;
+        color: var(--muted);
         white-space: nowrap;
+    }
+    .dot{
+        width: 10px;
+        height: 10px;
+        border-radius: 999px;
+        background: rgba(34,197,94,.9);
+        box-shadow: 0 0 0 5px rgba(34,197,94,.12);
     }
 
     .grid{
         display:grid;
-        grid-template-columns: 1.1fr .9fr;
+        grid-template-columns: 1.15fr .85fr;
         gap: 18px;
         margin-top: 18px;
     }
 
     @media (max-width: 900px){
         .grid{ grid-template-columns: 1fr; }
-        .hero{ flex-direction: column; align-items:flex-start; }
+        .pill{ width:100%; justify-content:center; }
+        .hero{ flex-direction: column; align-items: stretch; }
     }
 
     .card{
-        background: linear-gradient(180deg, rgba(255,255,255,.07), rgba(255,255,255,.05));
-        border: 1px solid var(--border);
+        background: linear-gradient(180deg, var(--card), var(--card2));
+        border: 1px solid var(--stroke);
         border-radius: var(--radius);
-        box-shadow: var(--shadow2);
+        box-shadow: var(--shadow);
         overflow:hidden;
     }
 
     .card-header{
-        padding: 18px 18px 12px;
+        padding: 16px 16px 10px;
         border-bottom: 1px solid rgba(255,255,255,.08);
         display:flex;
         align-items:flex-start;
         justify-content:space-between;
-        gap: 12px;
+        gap: 14px;
     }
 
-    .card-header h2{
-        margin:0;
+    .card-title{
+        margin: 0;
         font-size: 16px;
-        letter-spacing: .2px;
+        font-weight: 700;
+        letter-spacing:-.01em;
     }
 
-    .card-header .sub{
-        margin-top: 6px;
-        color: var(--muted2);
+    .card-sub{
+        margin: 6px 0 0 0;
+        color: var(--muted);
         font-size: 13px;
-        line-height: 1.45;
+        line-height: 1.4;
     }
 
-    .card-body{
-        padding: 18px;
-    }
+    .card-body{ padding: 16px; }
 
     .row{
         display:flex;
-        gap: 10px;
-        align-items:center;
+        gap: 12px;
+        align-items: center;
         flex-wrap: wrap;
     }
 
-    .input{
-        width: 100%;
-        max-width: 520px;
-        padding: 12px 14px;
+    .field{
+        flex: 1 1 320px;
+        display:flex;
+        flex-direction: column;
+        gap:8px;
+    }
+
+    label{
+        font-size: 12px;
+        color: var(--muted);
+        letter-spacing:.02em;
+    }
+
+    input[type="email"]{
+        width:100%;
+        padding: 12px 12px;
         border-radius: 12px;
         border: 1px solid rgba(255,255,255,.14);
-        background: rgba(0,0,0,.25);
+        background: rgba(0,0,0,.18);
         color: var(--text);
-        outline:none;
-        transition: box-shadow .2s, border-color .2s, transform .08s;
+        outline: none;
     }
-    .input::placeholder{ color: rgba(255,255,255,.45); }
-    .input:focus{
-        border-color: rgba(124,58,237,.6);
-        box-shadow: var(--ring);
+
+    input[type="email"]:focus{
+        border-color: rgba(124,58,237,.75);
+        box-shadow: 0 0 0 5px rgba(124,58,237,.18);
     }
 
     .btn{
-        display:inline-flex;
-        align-items:center;
-        gap: 10px;
-        border: 1px solid rgba(255,255,255,.14);
-        padding: 11px 14px;
+        padding: 12px 14px;
         border-radius: 12px;
-        background: rgba(255,255,255,.07);
+        border: 1px solid rgba(255,255,255,.14);
+        background: rgba(255,255,255,.06);
         color: var(--text);
         cursor:pointer;
+        font-weight: 600;
+        transition: transform .05s ease, background .15s ease, border-color .15s ease;
+        display:inline-flex;
+        align-items:center;
+        justify-content:center;
+        gap:10px;
         text-decoration:none;
         user-select:none;
-        transition: transform .08s, background .2s, border-color .2s, opacity .2s;
-        font-weight: 600;
-        letter-spacing: .2px;
     }
-    .btn:hover{ background: rgba(255,255,255,.10); border-color: rgba(255,255,255,.20); }
+
+    .btn:hover{ background: rgba(255,255,255,.10); }
     .btn:active{ transform: translateY(1px); }
-    .btn:disabled{ opacity:.55; cursor:not-allowed; }
 
     .btn-primary{
-        border-color: rgba(124,58,237,.45);
-        background: linear-gradient(180deg, rgba(124,58,237,.45), rgba(124,58,237,.25));
+        background: linear-gradient(135deg, rgba(124,58,237,.95), rgba(124,58,237,.55));
+        border-color: rgba(124,58,237,.55);
     }
-    .btn-primary:hover{ background: linear-gradient(180deg, rgba(124,58,237,.55), rgba(124,58,237,.32)); }
+    .btn-primary:hover{ background: linear-gradient(135deg, rgba(124,58,237,1), rgba(124,58,237,.65)); }
 
-    .btn-green{
-        border-color: rgba(34,197,94,.45);
-        background: linear-gradient(180deg, rgba(34,197,94,.35), rgba(34,197,94,.18));
+    .btn-success{
+        background: linear-gradient(135deg, rgba(34,197,94,.9), rgba(34,197,94,.45));
+        border-color: rgba(34,197,94,.55);
     }
 
     .btn-ghost{
         background: transparent;
-        border-color: rgba(255,255,255,.12);
+        border-color: rgba(255,255,255,.14);
         color: var(--muted);
-        font-weight: 600;
     }
 
     .hint{
-        margin-top: 12px;
-        color: var(--muted2);
-        font-size: 13px;
-        line-height: 1.45;
-    }
-
-    .status{
-        margin-top: 12px;
-        border-radius: 12px;
-        border: 1px solid rgba(255,255,255,.12);
-        background: rgba(0,0,0,.18);
-        padding: 10px 12px;
+        margin-top: 10px;
         color: var(--muted);
-        font-size: 13px;
-        display:none;
+        font-size: 12px;
+        line-height: 1.4;
     }
-    .status.show{ display:block; }
-    .status.error{ border-color: rgba(239,68,68,.35); color: rgba(255,255,255,.88); background: rgba(239,68,68,.10); }
-    .status.ok{ border-color: rgba(34,197,94,.35); background: rgba(34,197,94,.10); color: rgba(255,255,255,.88); }
 
-    .file-list{
-        margin-top: 14px;
+    .split{
         display:flex;
-        flex-direction:column;
         gap: 10px;
+        flex-wrap: wrap;
     }
 
-    .file-item{
+    .list{
+        display:flex;
+        flex-direction: column;
+        gap: 10px;
+        margin: 0;
+        padding: 0;
+        list-style:none;
+    }
+
+    .item{
         display:flex;
         align-items:center;
         justify-content:space-between;
-        gap: 10px;
+        gap: 12px;
         padding: 12px 12px;
         border-radius: 14px;
-        border: 1px solid rgba(255,255,255,.10);
-        background: rgba(255,255,255,.05);
+        border: 1px solid rgba(255,255,255,.12);
+        background: rgba(0,0,0,.16);
     }
-    .file-name{
+
+    .file-meta{
         display:flex;
-        flex-direction:column;
+        flex-direction: column;
         gap: 2px;
         min-width: 0;
     }
-    .file-name strong{
-        font-size: 13.5px;
-        white-space: nowrap;
+
+    .file-name{
+        font-weight: 650;
+        font-size: 13px;
         overflow:hidden;
-        text-overflow: ellipsis;
-    }
-    .file-name span{
-        font-size: 12px;
-        color: var(--muted2);
+        text-overflow:ellipsis;
+        white-space:nowrap;
+        max-width: 520px;
     }
 
-    .kbd{
+    .file-sub{
+        color: var(--muted);
         font-size: 12px;
-        color: rgba(255,255,255,.78);
+    }
+
+    .badge{
+        font-size: 11px;
+        padding: 6px 10px;
+        border-radius: 999px;
         border: 1px solid rgba(255,255,255,.14);
-        background: rgba(0,0,0,.25);
-        padding: 4px 8px;
-        border-radius: 10px;
+        background: rgba(255,255,255,.06);
+        color: var(--muted);
         white-space: nowrap;
     }
 
     .empty{
-        margin-top: 14px;
-        padding: 14px 12px;
+        padding: 14px;
         border-radius: 14px;
         border: 1px dashed rgba(255,255,255,.18);
-        background: rgba(0,0,0,.14);
         color: var(--muted);
-        line-height: 1.45;
-        font-size: 13px;
+        background: rgba(0,0,0,.12);
+        line-height: 1.5;
     }
 
-    .divider{
-        height: 1px;
-        background: rgba(255,255,255,.08);
-        margin: 14px 0;
+    .toast{
+        margin-top: 12px;
+        padding: 12px 12px;
+        border-radius: 14px;
+        border: 1px solid rgba(255,255,255,.12);
+        background: rgba(0,0,0,.18);
+        color: var(--muted);
+        display:none;
     }
+    .toast.show{ display:block; }
+    .toast strong{ color: var(--text); }
 </style>
 
 <div class="page-wrap">
     <div class="hero">
         <div>
-            <h1>Mail Draft + EML Archive</h1>
+            <h1>Outlook Draft Sender</h1>
             <p>
-                Create a draft email (with a PDF attachment) via Microsoft Graph and open it in Outlook.
-                When you send it, your app exports the sent mail as an <span class="kbd">.eml</span> file and lists it below.
+                Create a draft with an attachment, open it in Outlook for review, and (if subscribed) automatically export the sent email as <code>.eml</code>.
             </p>
         </div>
-        <div class="pill" title="Your webhook must be publicly reachable (e.g., ngrok/dev tunnel).">
-            <span>🔔</span>
-            <span>Graph notifications enabled via webhook</span>
+
+        <div class="pill" title="Webhook subscriptions must be created once per user and renewed when expiring">
+            <span class="dot"></span>
+            <span>Webhook ready (when subscribed)</span>
         </div>
     </div>
 
     <div class="grid">
-
-        <!-- Left: Create draft -->
+        <!-- LEFT: Compose -->
         <div class="card">
             <div class="card-header">
                 <div>
-                    <h2>1) Create draft and open Outlook</h2>
-                    <div class="sub">
-                        Enter a recipient email. We’ll create a draft with an attachment and redirect you to Outlook to review and send it.
+                    <div class="card-title">Create draft & open Outlook</div>
+                    <div class="card-sub">
+                        Your app creates the draft + attachment via Microsoft Graph and redirects to Outlook Web compose.
                     </div>
                 </div>
-                <span class="kbd">Mail.ReadWrite</span>
+                <span class="badge">Delegated: Mail.ReadWrite</span>
             </div>
+
             <div class="card-body">
                 <form id="sendForm" action="/Mail/CreateDraftAndGetComposeLink" method="post">
                     @Html.AntiForgeryToken()
 
                     <div class="row">
-                        <input id="toEmail" class="input" type="email" name="toEmail" placeholder="recipient@example.com" required />
-                        <button id="sendBtn" class="btn btn-primary" type="submit">
-                            ✉️ Create draft
+                        <div class="field">
+                            <label for="toEmail">Recipient email</label>
+                            <input id="toEmail" type="email" name="toEmail" placeholder="recipient@example.com" required />
+                        </div>
+
+                        <button class="btn btn-primary" type="submit" title="Creates a draft and opens it in Outlook">
+                            <span>Send via Outlook</span>
+                            <span aria-hidden="true">↗</span>
                         </button>
                     </div>
 
                     <div class="hint">
-                        After you click <strong>Create draft</strong>, you’ll be redirected to Outlook Web. Click <strong>Send</strong> there.
-                        Your exported <span class="kbd">.eml</span> should appear below shortly after.
+                        Tip: after you click <strong>Send</strong> in Outlook, the exported <code>.eml</code> will appear in the list on the right (if you subscribed).
                     </div>
-
-                    <div id="sendStatus" class="status"></div>
                 </form>
+
+                <div class="split" style="margin-top:14px;">
+                    <a class="btn btn-ghost" href="/Mail/WarmUp" title="Optional warm-up endpoint for Outlook/Graph usage">
+                        Enable Outlook sending
+                    </a>
+                </div>
+
+                <div id="toast" class="toast"></div>
             </div>
         </div>
 
-        <!-- Right: Subscribe -->
+        <!-- RIGHT: Subscription + EML list -->
         <div class="card">
             <div class="card-header">
                 <div>
-                    <h2>2) Subscribe to Sent Items notifications</h2>
-                    <div class="sub">
-                        Creates (or refreshes) a Microsoft Graph subscription so your app can export sent messages as <span class="kbd">.eml</span>.
+                    <div class="card-title">Notifications & exported .eml</div>
+                    <div class="card-sub">
+                        Subscribe once. When a sent email appears in Sent Items, your backend exports it to <code>.eml</code>.
                     </div>
                 </div>
-                <span class="kbd">Mail.Read (App)</span>
+                <span class="badge">App-only: Mail.Read</span>
             </div>
-            <div class="card-body">
-                <form id="subForm" action="/graph/subscribe-sentitems" method="post">
-                    @Html.AntiForgeryToken()
 
-                    <button id="subBtn" class="btn btn-green" type="submit">
-                        🔔 Subscribe
+            <div class="card-body">
+                <form action="/graph/subscribe-sentitems" method="post" style="margin-bottom:14px;">
+                    @Html.AntiForgeryToken()
+                    <button class="btn btn-success" type="submit" title="Creates a Graph subscription for Sent Items">
+                        Subscribe to notifications
                     </button>
+                    <div class="hint">
+                        If you restart ngrok/dev tunnel and the public URL changes, re-subscribe so Graph posts to the correct URL.
+                    </div>
                 </form>
 
-                <div class="hint">
-                    Call this once per user (or after restarting tunnels). If you see duplicates, ensure old subscriptions are removed or exports are idempotent.
+                <div style="margin: 10px 0 12px;">
+                    <div class="card-title" style="font-size:14px;">Saved EML files</div>
+                    <div class="card-sub">Download and open them in Outlook or any EML viewer.</div>
                 </div>
 
-                <div id="subStatus" class="status"></div>
-            </div>
-        </div>
-
-        <!-- Full width: EML list -->
-        <div class="card" style="grid-column: 1 / -1;">
-            <div class="card-header">
-                <div>
-                    <h2>Saved .eml files</h2>
-                    <div class="sub">
-                        These are stored on the server (e.g., <span class="kbd">App_Data/eml</span>). Click to download and open in Outlook.
+                @if (!emlFiles.Any())
+                {
+                    <div class="empty">
+                        No <code>.eml</code> files found yet.<br />
+                        1) Click <strong>Subscribe to notifications</strong><br />
+                        2) Send an email via Outlook<br />
+                        3) Refresh this page
                     </div>
-                </div>
+                }
+                else
+                {
+                    <ul class="list">
+                        @foreach (var file in emlFiles)
+                        {
+                            <li class="item">
+                                <div class="file-meta">
+                                    <div class="file-name">@file</div>
+                                    <div class="file-sub">Stored in <code>App_Data/eml</code></div>
+                                </div>
 
-                <div class="row">
-                    <button id="refreshBtn" class="btn btn-ghost" type="button" onclick="loadEmlFiles()">
-                        ⟳ Refresh
-                    </button>
-                </div>
-            </div>
+                                <div class="split">
+                                    <a class="btn" href="/eml/@Uri.EscapeDataString(file)" title="Download this .eml">
+                                        Download
+                                    </a>
+                                </div>
+                            </li>
+                        }
+                    </ul>
+                }
 
-            <div class="card-body">
-                <div id="emlStatus" class="status"></div>
-                <div id="emlList" class="file-list"></div>
-                <div id="emlEmpty" class="empty" style="display:none;">
-                    No <span class="kbd">.eml</span> files yet. Send an email in Outlook, then click <strong>Refresh</strong>.
+                <div class="hint" style="margin-top:12px;">
+                    If you see duplicates, ensure you only have one active Graph subscription per user and save files as <code>{messageId}.eml</code>.
                 </div>
             </div>
         </div>
-
     </div>
 </div>
 
 <script>
-    // Friendly status helper
-    function setStatus(el, msg, kind) {
-        el.classList.remove("show", "ok", "error");
-        if (!msg) return;
-        el.textContent = msg;
-        el.classList.add("show");
-        if (kind) el.classList.add(kind);
-    }
+  // Optional: an alternative "AJAX submit" experience (kept small + safe).
+  // Your server currently redirects to Outlook, so fetch() won't follow that UX well.
+  // We'll keep the function in case you later change the endpoint to return JSON.
+  async function sendViaMail() {
+    const toEmail = document.getElementById("toEmail").value;
+    const form = document.getElementById("sendForm");
+    const token = form.querySelector('input[name="__RequestVerificationToken"]').value;
 
-    // Load EML list from GET /eml (expects JSON array of file names)
-    async function loadEmlFiles() {
-        const status = document.getElementById("emlStatus");
-        const listEl = document.getElementById("emlList");
-        const emptyEl = document.getElementById("emlEmpty");
+    const body = new URLSearchParams();
+    body.append("__RequestVerificationToken", token);
+    body.append("toEmail", toEmail);
 
-        setStatus(status, "Loading .eml files…");
-        listEl.innerHTML = "";
-        emptyEl.style.display = "none";
-
-        try {
-            const res = await fetch("/eml", { headers: { "Accept": "application/json" }});
-            if (!res.ok) {
-                const t = await res.text();
-                setStatus(status, "Could not load .eml files: " + t, "error");
-                return;
-            }
-
-            const files = await res.json();
-            setStatus(status, "");
-
-            if (!files || files.length === 0) {
-                emptyEl.style.display = "block";
-                return;
-            }
-
-            // Render newest first if already sorted; otherwise reverse as a simple heuristic
-            for (const f of files) {
-                const item = document.createElement("div");
-                item.className = "file-item";
-
-                const left = document.createElement("div");
-                left.className = "file-name";
-
-                const name = document.createElement("strong");
-                name.textContent = f;
-
-                const meta = document.createElement("span");
-                meta.textContent = "Download and open in Outlook / Mail clients";
-
-                left.appendChild(name);
-                left.appendChild(meta);
-
-                const link = document.createElement("a");
-                link.className = "btn";
-                link.href = "/eml/" + encodeURIComponent(f);
-                link.textContent = "Download";
-
-                item.appendChild(left);
-                item.appendChild(link);
-
-                listEl.appendChild(item);
-            }
-        } catch (e) {
-            setStatus(status, "Error loading .eml files: " + e, "error");
-        }
-    }
-
-    // Auto-load list on page load
-    document.addEventListener("DOMContentLoaded", () => {
-        loadEmlFiles();
-
-        // Optional: refresh periodically (uncomment if you like)
-        // setInterval(loadEmlFiles, 5000);
+    const res = await fetch("/Mail/CreateDraftAndGetComposeLink", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body
     });
+
+    if (!res.ok) {
+      const errText = await res.text();
+      const toast = document.getElementById("toast");
+      toast.classList.add("show");
+      toast.innerHTML = `<strong>Error</strong><br/><span>${errText.replaceAll("<","&lt;")}</span>`;
+      return;
+    }
+  }
 </script>
