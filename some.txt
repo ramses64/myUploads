@@ -1,1 +1,2 @@
-MessageBox.Show($"Apartment: {System.Threading.Thread.CurrentThread.GetApartmentState()}");
+        int hrOle = Ole32.OleInitialize(IntPtr.Zero);
+        MessageBox.Show($"OleInitialize hr = 0x{hrOle:X8}");
