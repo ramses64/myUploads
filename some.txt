@@ -1,2 +1,16 @@
-        int hrOle = Ole32.OleInitialize(IntPtr.Zero);
-        MessageBox.Show($"OleInitialize hr = 0x{hrOle:X8}");
+protected override void OnSourceInitialized(EventArgs e)
+{
+    base.OnSourceInitialized(e);
+
+    _hwnd = new WindowInteropHelper(this).Handle;
+
+    // 🔥 Important: revoke anything WPF may have registered
+    try { Ole32.RevokeDragDrop(_hwnd); } catch { }
+
+    _dropTarget = new OutlookAsyncDropTarget(_hwnd, AddPathsToUi);
+
+    int hr = Ole32.RegisterDragDrop(_hwnd, _dropTarget);
+
+    if (hr != 0)
+        MessageBox.Show($"RegisterDragDrop failed: 0x{hr:X8}");
+}
