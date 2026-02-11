@@ -1,16 +1,75 @@
-protected override void OnSourceInitialized(EventArgs e)
+using System;
+using System.Threading;
+using System.Windows;
+using System.Windows.Interop;
+
+namespace WpfApp1
 {
-    base.OnSourceInitialized(e);
+    public partial class MainWindow : Window
+    {
+        private OutlookAsyncDropTarget _dropTarget;
+        private IntPtr _hwnd;
 
-    _hwnd = new WindowInteropHelper(this).Handle;
+        public MainWindow()
+        {
+            InitializeComponent();
+        }
 
-    // 🔥 Important: revoke anything WPF may have registered
-    try { Ole32.RevokeDragDrop(_hwnd); } catch { }
+        protected override void OnSourceInitialized(EventArgs e)
+        {
+            base.OnSourceInitialized(e);
 
-    _dropTarget = new OutlookAsyncDropTarget(_hwnd, AddPathsToUi);
+            // Get native window handle
+            _hwnd = new WindowInteropHelper(this).Handle;
 
-    int hr = Ole32.RegisterDragDrop(_hwnd, _dropTarget);
+            // Ensure OLE is initialized (safe even if already initialized)
+            int hrOle = Ole32.OleInitialize(IntPtr.Zero);
+            if (hrOle != 0 && hrOle != 1) // S_OK or S_FALSE
+            {
+                MessageBox.Show($"OleInitialize failed: 0x{hrOle:X8}");
+                return;
+            }
 
-    if (hr != 0)
-        MessageBox.Show($"RegisterDragDrop failed: 0x{hr:X8}");
+            // 🔥 Remove any existing drop target (WPF may have registered one)
+            try { Ole32.RevokeDragDrop(_hwnd); } catch { }
+
+            // Register our async-aware drop target
+            _dropTarget = new OutlookAsyncDropTarget(_hwnd, AddPathsToUi);
+
+            int hr = Ole32.RegisterDragDrop(_hwnd, _dropTarget);
+            if (hr != 0)
+            {
+                MessageBox.Show($"RegisterDragDrop failed: 0x{hr:X8}");
+            }
+        }
+
+        protected override void OnClosed(EventArgs e)
+        {
+            try
+            {
+                Ole32.RevokeDragDrop(_hwnd);
+            }
+            catch { }
+
+            try
+            {
+                Ole32.OleUninitialize();
+            }
+            catch { }
+
+            base.OnClosed(e);
+        }
+
+        private void AddPathsToUi(string[] paths)
+        {
+            // We are coming from worker thread → must use Dispatcher
+            Dispatcher.Invoke(() =>
+            {
+                foreach (var p in paths)
+                {
+                    MyListBox.Items.Add(p);
+                }
+            });
+        }
+    }
 }
