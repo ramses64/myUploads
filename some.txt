@@ -1,28 +1,15 @@
-private async void OnNativeDrop(string[] paths)
+private UIElement? FindDropTarget(DependencyObject start)
 {
-    await Dispatcher.InvokeAsync(() =>
+    DependencyObject? cur = start;
+    while (cur != null)
     {
-        // 1) Find element under mouse (drop target)
-        var pos = Mouse.GetPosition(this);
-        var target = InputHitTest(pos) as DependencyObject;
-        if (target == null)
-            return;
+        // You can refine this check:
+        // - UIElement has AllowDrop property
+        // - Some controls handle Drop even if AllowDrop isn't set (repo-dependent)
+        if (cur is UIElement el && el.AllowDrop)
+            return el;
 
-        // 2) Walk up until we find something that can accept drops
-        var dropTarget = FindDropTarget(target);
-        if (dropTarget == null)
-            return;
-
-        // 3) Create WPF IDataObject that looks like a FileDrop
-        var data = new DataObject(DataFormats.FileDrop, paths);
-
-        // 4) Raise WPF Drop event on that element
-        // Effects: Copy (like Outlook/Explorer)
-        var args = new DragEventArgs(data, 0, pos.X, pos.Y, DragDropEffects.Copy, DragDropEffects.Copy)
-        {
-            RoutedEvent = UIElement.DropEvent
-        };
-
-        dropTarget.RaiseEvent(args);
-    });
+        cur = System.Windows.Media.VisualTreeHelper.GetParent(cur);
+    }
+    return null;
 }
