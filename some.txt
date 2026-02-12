@@ -1,75 +1,28 @@
-using System;
-using System.Threading;
-using System.Windows;
-using System.Windows.Interop;
-
-namespace WpfApp1
+private async void OnNativeDrop(string[] paths)
 {
-    public partial class MainWindow : Window
+    await Dispatcher.InvokeAsync(() =>
     {
-        private OutlookAsyncDropTarget _dropTarget;
-        private IntPtr _hwnd;
+        // 1) Find element under mouse (drop target)
+        var pos = Mouse.GetPosition(this);
+        var target = InputHitTest(pos) as DependencyObject;
+        if (target == null)
+            return;
 
-        public MainWindow()
+        // 2) Walk up until we find something that can accept drops
+        var dropTarget = FindDropTarget(target);
+        if (dropTarget == null)
+            return;
+
+        // 3) Create WPF IDataObject that looks like a FileDrop
+        var data = new DataObject(DataFormats.FileDrop, paths);
+
+        // 4) Raise WPF Drop event on that element
+        // Effects: Copy (like Outlook/Explorer)
+        var args = new DragEventArgs(data, 0, pos.X, pos.Y, DragDropEffects.Copy, DragDropEffects.Copy)
         {
-            InitializeComponent();
-        }
+            RoutedEvent = UIElement.DropEvent
+        };
 
-        protected override void OnSourceInitialized(EventArgs e)
-        {
-            base.OnSourceInitialized(e);
-
-            // Get native window handle
-            _hwnd = new WindowInteropHelper(this).Handle;
-
-            // Ensure OLE is initialized (safe even if already initialized)
-            int hrOle = Ole32.OleInitialize(IntPtr.Zero);
-            if (hrOle != 0 && hrOle != 1) // S_OK or S_FALSE
-            {
-                MessageBox.Show($"OleInitialize failed: 0x{hrOle:X8}");
-                return;
-            }
-
-            // 🔥 Remove any existing drop target (WPF may have registered one)
-            try { Ole32.RevokeDragDrop(_hwnd); } catch { }
-
-            // Register our async-aware drop target
-            _dropTarget = new OutlookAsyncDropTarget(_hwnd, AddPathsToUi);
-
-            int hr = Ole32.RegisterDragDrop(_hwnd, _dropTarget);
-            if (hr != 0)
-            {
-                MessageBox.Show($"RegisterDragDrop failed: 0x{hr:X8}");
-            }
-        }
-
-        protected override void OnClosed(EventArgs e)
-        {
-            try
-            {
-                Ole32.RevokeDragDrop(_hwnd);
-            }
-            catch { }
-
-            try
-            {
-                Ole32.OleUninitialize();
-            }
-            catch { }
-
-            base.OnClosed(e);
-        }
-
-        private void AddPathsToUi(string[] paths)
-        {
-            // We are coming from worker thread → must use Dispatcher
-            Dispatcher.Invoke(() =>
-            {
-                foreach (var p in paths)
-                {
-                    MyListBox.Items.Add(p);
-                }
-            });
-        }
-    }
+        dropTarget.RaiseEvent(args);
+    });
 }
