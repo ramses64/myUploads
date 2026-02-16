@@ -1,15 +1,117 @@
-private UIElement? FindDropTarget(DependencyObject start)
-{
-    DependencyObject? cur = start;
-    while (cur != null)
-    {
-        // You can refine this check:
-        // - UIElement has AllowDrop property
-        // - Some controls handle Drop even if AllowDrop isn't set (repo-dependent)
-        if (cur is UIElement el && el.AllowDrop)
-            return el;
+using System;
+using System.Runtime.InteropServices;
+using System.Runtime.InteropServices.ComTypes;
+using System.Threading;
+using System.Threading.Tasks;
 
-        cur = System.Windows.Media.VisualTreeHelper.GetParent(cur);
+internal static class OutlookAsyncFileDrop
+{
+    public static Task<string[]?> TryGetFileDropPathsAsync(System.Runtime.InteropServices.ComTypes.IDataObject comDataObj)
+    {
+        // If the source does not support async capability, do nothing
+        if (comDataObj is not IDataObjectAsyncCapability asyncCap)
+            return Task.FromResult<string[]?>(null);
+
+        try
+        {
+            asyncCap.SetAsyncMode(true);
+            asyncCap.StartOperation(null);
+        }
+        catch
+        {
+            // If StartOperation fails, treat as “not async-capable”
+            return Task.FromResult<string[]?>(null);
+        }
+
+        // Marshal COM interfaces into streams for another thread
+        var iidDataObj = typeof(System.Runtime.InteropServices.ComTypes.IDataObject).GUID;
+        Ole32.ThrowIfFailed(Ole32.CoMarshalInterThreadInterfaceInStream(ref iidDataObj, comDataObj, out var stmDataObj));
+
+        var iidAsync = typeof(IDataObjectAsyncCapability).GUID;
+        Ole32.ThrowIfFailed(Ole32.CoMarshalInterThreadInterfaceInStream(ref iidAsync, asyncCap, out var stmAsync));
+
+        var tcs = new TaskCompletionSource<string[]?>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var worker = new Thread(() =>
+        {
+            Ole32.ThrowIfFailed(Ole32.CoInitializeEx(IntPtr.Zero, Ole32.COINIT_APARTMENTTHREADED));
+            try
+            {
+                // Rehydrate COM interfaces on this STA thread
+                Ole32.ThrowIfFailed(Ole32.CoGetInterfaceAndReleaseStream(stmDataObj, ref iidDataObj, out object dataObjUnk));
+                var dataObj = (System.Runtime.InteropServices.ComTypes.IDataObject)dataObjUnk;
+
+                Ole32.ThrowIfFailed(Ole32.CoGetInterfaceAndReleaseStream(stmAsync, ref iidAsync, out object asyncUnk));
+                var async2 = (IDataObjectAsyncCapability)asyncUnk;
+
+                try
+                {
+                    var paths = GetHDropFilePaths(dataObj);
+                    tcs.TrySetResult(paths.Length > 0 ? paths : null);
+                }
+                catch (Exception ex)
+                {
+                    tcs.TrySetException(ex);
+                }
+                finally
+                {
+                    // Signal to the source we’re done
+                    try { async2.EndOperation(0, null, Ole32.DROPEFFECT_COPY); } catch { /* ignore */ }
+                }
+            }
+            finally
+            {
+                Ole32.CoUninitialize();
+            }
+        });
+
+        worker.IsBackground = true;
+        worker.SetApartmentState(ApartmentState.STA);
+        worker.Start();
+
+        return tcs.Task;
     }
-    return null;
+
+    private static string[] GetHDropFilePaths(System.Runtime.InteropServices.ComTypes.IDataObject dataObj)
+    {
+        var fmt = new FORMATETC
+        {
+            cfFormat = Shell32.CF_HDROP,
+            dwAspect = DVASPECT.DVASPECT_CONTENT,
+            lindex = -1,
+            ptd = IntPtr.Zero,
+            tymed = TYMED.TYMED_HGLOBAL
+        };
+
+        dataObj.GetData(ref fmt, out STGMEDIUM medium);
+
+        try
+        {
+            if (medium.tymed != TYMED.TYMED_HGLOBAL || medium.unionmember == IntPtr.Zero)
+                return Array.Empty<string>();
+
+            IntPtr hDrop = medium.unionmember;
+
+            uint count = Shell32.DragQueryFile(hDrop, 0xFFFFFFFF, null, 0);
+            if (count == 0)
+                return Array.Empty<string>();
+
+            var result = new string[count];
+
+            for (uint i = 0; i < count; i++)
+            {
+                uint len = Shell32.DragQueryFile(hDrop, i, null, 0);
+                var buf = new char[len + 1];
+                Shell32.DragQueryFile(hDrop, i, buf, (uint)buf.Length);
+                result[i] = new string(buf).TrimEnd('\0');
+            }
+
+            return result;
+        }
+        finally
+        {
+            OleHelpers.ReleaseStgMedium(ref medium);
+        }
+    }
 }
