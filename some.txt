@@ -1,4 +1,4 @@
-in .NET Wpf i have implemented a prototype in order to make the drag and drop for the new outlook possible...for this i have used the COM solution...
+in .NET WPF i have implemented a prototype in order to make the drag and drop for the new outlook possible...for this i have used the COM solution...
 
 
 using System;
@@ -316,3 +316,5 @@ public sealed class OutlookAsyncDropTarget : IDropTarget
         }
     }
 }
+
+but now the drag drop from the old (classic) outlook does not work anymore...in the line dataObj.GetData(ref fmt, out STGMEDIUM medium); it throws an exception: System.Runtime.InteropServices.COMException: Ungültige FORMATETC-Struktur (Ausnahme von HResult: 0x80040064 (DV_E_FORMATETC)

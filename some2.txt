@@ -1,0 +1,28 @@
+static class ClipboardFormats
+{
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    public static extern ushort RegisterClipboardFormat(string lpszFormat);
+
+    public static readonly short CF_FILEDESCRIPTORW = unchecked((short)RegisterClipboardFormat("FileGroupDescriptorW"));
+    public static readonly short CF_FILECONTENTS    = unchecked((short)RegisterClipboardFormat("FileContents"));
+}
+
+[StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+struct FILEDESCRIPTORW
+{
+    public uint dwFlags;
+    public Guid clsid;
+    public uint sizelcx;
+    public uint sizelcy;
+    public uint pointlx;
+    public uint pointly;
+    public uint dwFileAttributes;
+    public System.Runtime.InteropServices.ComTypes.FILETIME ftCreationTime;
+    public System.Runtime.InteropServices.ComTypes.FILETIME ftLastAccessTime;
+    public System.Runtime.InteropServices.ComTypes.FILETIME ftLastWriteTime;
+    public uint nFileSizeHigh;
+    public uint nFileSizeLow;
+
+    [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)]
+    public string cFileName;
+}
