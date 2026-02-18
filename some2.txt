@@ -1,54 +1,80 @@
 using System;
-using System.Collections.Generic;
-using System.IO;
 using System.Runtime.InteropServices;
 using System.Runtime.InteropServices.ComTypes;
 
-static class User32
+[ComImport]
+[Guid("0000000B-0000-0000-C000-000000000046")]
+[InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+interface IStorage
 {
-    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
-    public static extern ushort RegisterClipboardFormat(string lpszFormat);
-}
-
-static class Kernel32
-{
-    [DllImport("kernel32.dll")]
-    public static extern IntPtr GlobalLock(IntPtr hMem);
-
-    [DllImport("kernel32.dll")]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    public static extern bool GlobalUnlock(IntPtr hMem);
-}
-
-static class StructuredStorage
-{
-    private const uint STGM_CREATE = 0x00001000;
-    private const uint STGM_READWRITE = 0x00000002;
-    private const uint STGM_SHARE_EXCLUSIVE = 0x00000010;
-
-    [DllImport("ole32.dll", CharSet = CharSet.Unicode)]
-    public static extern int StgCreateDocfile(
-        string pwcsName,
+    void CreateStream(
+        [MarshalAs(UnmanagedType.LPWStr)] string pwcsName,
         uint grfMode,
+        uint reserved1,
+        uint reserved2,
+        out IStream ppstm);
+
+    void OpenStream(
+        [MarshalAs(UnmanagedType.LPWStr)] string pwcsName,
+        IntPtr reserved1,
+        uint grfMode,
+        uint reserved2,
+        out IStream ppstm);
+
+    void CreateStorage(
+        [MarshalAs(UnmanagedType.LPWStr)] string pwcsName,
+        uint grfMode,
+        uint reserved1,
+        uint reserved2,
+        out IStorage ppstg);
+
+    void OpenStorage(
+        [MarshalAs(UnmanagedType.LPWStr)] string pwcsName,
+        IStorage pstgPriority,
+        uint grfMode,
+        IntPtr snbExclude,
         uint reserved,
-        out IStorage ppstgOpen);
+        out IStorage ppstg);
 
-    public static void SaveIStorageToFile(IStorage src, string path)
-    {
-        Ole32.ThrowIfFailed(StgCreateDocfile(
-            path,
-            STGM_CREATE | STGM_READWRITE | STGM_SHARE_EXCLUSIVE,
-            0,
-            out var dst));
+    void CopyTo(
+        uint ciidExclude,
+        [MarshalAs(UnmanagedType.LPArray, SizeParamIndex = 0)]
+        Guid[] rgiidExclude,
+        IntPtr snbExclude,
+        IStorage pstgDest);
 
-        try
-        {
-            src.CopyTo(0, null, IntPtr.Zero, dst);
-            dst.Commit(0);
-        }
-        finally
-        {
-            Marshal.ReleaseComObject(dst);
-        }
-    }
+    void MoveElementTo(
+        [MarshalAs(UnmanagedType.LPWStr)] string pwcsName,
+        IStorage pstgDest,
+        [MarshalAs(UnmanagedType.LPWStr)] string pwcsNewName,
+        uint grfFlags);
+
+    void Commit(uint grfCommitFlags);
+
+    void Revert();
+
+    void EnumElements(
+        uint reserved1,
+        IntPtr reserved2,
+        uint reserved3,
+        out object ppenum);
+
+    void DestroyElement(
+        [MarshalAs(UnmanagedType.LPWStr)] string pwcsName);
+
+    void RenameElement(
+        [MarshalAs(UnmanagedType.LPWStr)] string pwcsOldName,
+        [MarshalAs(UnmanagedType.LPWStr)] string pwcsNewName);
+
+    void SetElementTimes(
+        [MarshalAs(UnmanagedType.LPWStr)] string pwcsName,
+        FILETIME pctime,
+        FILETIME patime,
+        FILETIME pmtime);
+
+    void SetClass(ref Guid clsid);
+
+    void SetStateBits(uint grfStateBits, uint grfMask);
+
+    void Stat(out STATSTG pstatstg, uint grfStatFlag);
 }
