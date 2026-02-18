@@ -1,7 +1,59 @@
+in .NET Wpf i have implemented a prototype in order to make the drag and drop for the new outlook possible...for this i have used the COM solution...
+
+
 using System;
-using System.Collections.Generic;
-using System.IO;
-using System.Linq;
+using System.Windows;
+using System.Windows.Interop;
+
+namespace WpfApp1
+{
+    public partial class MainWindow : Window
+    {
+        private OutlookAsyncDropTarget _dropTarget;
+
+        public MainWindow()
+        {
+            InitializeComponent();
+        }
+
+        protected override void OnSourceInitialized(EventArgs e)
+        {
+            base.OnSourceInitialized(e);
+
+            // Get native window handle
+            var hwnd = new WindowInteropHelper(this).Handle;
+
+            _dropTarget = new OutlookAsyncDropTarget(hwnd, AddPathsToUi);
+
+            int hr = Ole32.RegisterDragDrop(hwnd, _dropTarget);
+            if (hr != 0)
+            {
+                MessageBox.Show($"RegisterDragDrop failed: 0x{hr:X8}");
+            }
+        }
+
+        protected override void OnClosed(EventArgs e)
+        {
+            var hwnd = new WindowInteropHelper(this).Handle;
+            Ole32.RevokeDragDrop(hwnd);
+            base.OnClosed(e);
+        }
+
+        private void AddPathsToUi(string[] paths)
+        {
+            Dispatcher.Invoke(() =>
+            {
+                foreach (var p in paths)
+                {
+                    MyListBox.Items.Add(p);
+                }
+            });
+        }
+    }
+}
+
+OutlookAsyncDropTarget.cs:
+using System;
 using System.Runtime.InteropServices;
 using System.Runtime.InteropServices.ComTypes;
 using System.Threading;
@@ -11,7 +63,7 @@ using System.Threading;
 [ComImport]
 [Guid("00000122-0000-0000-C000-000000000046")]
 [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-internal interface IDropTarget
+interface IDropTarget
 {
     void DragEnter([In] System.Runtime.InteropServices.ComTypes.IDataObject pDataObj,
                    uint grfKeyState, long pt, ref uint pdwEffect);
@@ -24,11 +76,11 @@ internal interface IDropTarget
               uint grfKeyState, long pt, ref uint pdwEffect);
 }
 
-// Async/virtual file drop support (New Outlook / Explorer behavior)
+// IDataObjectAsyncCapability (used by Explorer for async/virtual file drops)
 [ComImport]
 [Guid("3D8B0590-F691-11D2-8EA9-006097DF5BD4")]
 [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-internal interface IDataObjectAsyncCapability
+interface IDataObjectAsyncCapability
 {
     void SetAsyncMode([MarshalAs(UnmanagedType.Bool)] bool fDoOpAsync);
     void GetAsyncMode([MarshalAs(UnmanagedType.Bool)] out bool pfIsOpAsync);
@@ -37,7 +89,7 @@ internal interface IDataObjectAsyncCapability
     void EndOperation(int hResult, IBindCtx pbcReserved, uint dwEffects);
 }
 
-internal static class Ole32
+static class Ole32
 {
     public const uint DROPEFFECT_COPY = 1;
 
@@ -65,12 +117,6 @@ internal static class Ole32
     [DllImport("ole32.dll")]
     public static extern void CoUninitialize();
 
-    [DllImport("ole32.dll")]
-    public static extern int OleInitialize(IntPtr pvReserved);
-
-    [DllImport("ole32.dll")]
-    public static extern void OleUninitialize();
-
     public const uint COINIT_APARTMENTTHREADED = 0x2;
 
     public static void ThrowIfFailed(int hr)
@@ -79,7 +125,7 @@ internal static class Ole32
     }
 }
 
-internal static class Shell32
+static class Shell32
 {
     public const short CF_HDROP = 15;
 
@@ -90,23 +136,7 @@ internal static class Shell32
     public static extern void DragFinish(IntPtr hDrop);
 }
 
-internal static class User32
-{
-    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
-    public static extern short RegisterClipboardFormat(string lpszFormat);
-}
-
-internal static class Kernel32
-{
-    [DllImport("kernel32.dll")]
-    public static extern IntPtr GlobalLock(IntPtr hMem);
-
-    [DllImport("kernel32.dll")]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    public static extern bool GlobalUnlock(IntPtr hMem);
-}
-
-internal static class OleHelpers
+static class OleHelpers
 {
     [DllImport("ole32.dll")]
     public static extern void ReleaseStgMedium(ref STGMEDIUM pmedium);
@@ -114,46 +144,10 @@ internal static class OleHelpers
 
 #endregion
 
-#region Classic Outlook virtual-file structs
-
-// FILEGROUPDESCRIPTORW starts with a DWORD count, followed by FILEDESCRIPTORW[count]
-[StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
-internal struct FILEDESCRIPTORW
-{
-    public uint dwFlags;
-    public Guid clsid;
-    public int sizel_cx;
-    public int sizel_cy;
-    public int pointl_x;
-    public int pointl_y;
-    public uint dwFileAttributes;
-    public FILETIME ftCreationTime;
-    public FILETIME ftLastAccessTime;
-    public FILETIME ftLastWriteTime;
-    public uint nFileSizeHigh;
-    public uint nFileSizeLow;
-
-    [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)]
-    public string cFileName;
-}
-
-#endregion
-
-/// <summary>
-/// Drop target that supports:
-/// - New Outlook (async CF_HDROP via IDataObjectAsyncCapability)
-/// - Classic Outlook (virtual files via FileGroupDescriptorW + FileContents)
-/// - Normal file drops (CF_HDROP)
-/// </summary>
-[ComVisible(true)]
-[ClassInterface(ClassInterfaceType.None)]
 public sealed class OutlookAsyncDropTarget : IDropTarget
 {
     private readonly IntPtr _hwnd;
     private readonly Action<string[]> _onFiles;
-
-    private static readonly short CFSTR_FILEDESCRIPTORW = User32.RegisterClipboardFormat("FileGroupDescriptorW");
-    private static readonly short CFSTR_FILECONTENTS = User32.RegisterClipboardFormat("FileContents");
 
     public OutlookAsyncDropTarget(IntPtr hwnd, Action<string[]> onFiles)
     {
@@ -179,22 +173,28 @@ public sealed class OutlookAsyncDropTarget : IDropTarget
     {
         pdwEffect = Ole32.DROPEFFECT_COPY;
 
-        // 1) New Outlook: try to enable async mode + StartOperation
+        // 1) Check async capability
         IDataObjectAsyncCapability? asyncCap = TryGetAsyncCapability(pDataObj);
+
+        // If supported, enable + start async operation (Explorer does this)
         if (asyncCap != null)
         {
             try
             {
+                // Some sources require SetAsyncMode(true) first
                 asyncCap.SetAsyncMode(true);
+
+                // Start operation: after this, the source can "materialize" temp files
                 asyncCap.StartOperation(null);
             }
             catch
             {
+                // If StartOperation fails, we still try to get HDROP normally
                 asyncCap = null;
             }
         }
 
-        // 2) Marshal COM interfaces to worker STA thread
+        // 2) Marshal COM interfaces to worker thread (don’t pass COM objects directly!)
         var iidDataObj = typeof(System.Runtime.InteropServices.ComTypes.IDataObject).GUID;
         Ole32.ThrowIfFailed(Ole32.CoMarshalInterThreadInterfaceInStream(ref iidDataObj, pDataObj, out var stmDataObj));
 
@@ -205,13 +205,14 @@ public sealed class OutlookAsyncDropTarget : IDropTarget
             Ole32.ThrowIfFailed(Ole32.CoMarshalInterThreadInterfaceInStream(ref iidAsync, asyncCap, out stmAsync));
         }
 
-        // 3) Worker thread does the blocking GetData calls (New Outlook can show dialogs)
+        // 3) Worker STA thread: retrieve CF_HDROP once files exist
         var worker = new Thread(() =>
         {
+            // Initialize COM in this thread as STA
             Ole32.ThrowIfFailed(Ole32.CoInitializeEx(IntPtr.Zero, Ole32.COINIT_APARTMENTTHREADED));
             try
             {
-                // Resolve marshaled interfaces for this thread
+                // Resolve marshaled interfaces for THIS thread
                 object dataObjUnk;
                 Ole32.ThrowIfFailed(Ole32.CoGetInterfaceAndReleaseStream(stmDataObj, ref iidDataObj, out dataObjUnk));
                 var dataObj = (System.Runtime.InteropServices.ComTypes.IDataObject)dataObjUnk;
@@ -227,22 +228,21 @@ public sealed class OutlookAsyncDropTarget : IDropTarget
 
                 try
                 {
-                    // Try CF_HDROP first (Explorer, normal files, New Outlook after async)
-                    var paths = TryGetHDropFilePaths(dataObj);
-
-                    // If CF_HDROP not available (often Classic Outlook mails), fallback to virtual files
-                    if (paths.Length == 0)
-                        paths = TryGetClassicOutlookVirtualFiles(dataObj);
-
+                    // NOTE: dragging EMAILS may show a New Outlook dialog.
+                    // GetData can block until the user responds — but at least it blocks only this worker thread.
+                    var paths = GetHDropFilePaths(dataObj);
                     if (paths.Length > 0)
                         _onFiles(paths);
                 }
                 finally
                 {
-                    // Tell source operation is finished (important for async sources)
+                    // 4) Tell the source we’re done
                     if (async2 != null)
                     {
-                        try { async2.EndOperation(0, null, Ole32.DROPEFFECT_COPY); }
+                        try
+                        {
+                            async2.EndOperation(0, null, Ole32.DROPEFFECT_COPY);
+                        }
                         catch { /* ignore */ }
                     }
                 }
@@ -257,19 +257,23 @@ public sealed class OutlookAsyncDropTarget : IDropTarget
         worker.SetApartmentState(ApartmentState.STA);
         worker.Start();
 
-        // Return immediately from Drop (keeps UI responsive)
+        // Return immediately from Drop (important!)
     }
 
     private static IDataObjectAsyncCapability? TryGetAsyncCapability(System.Runtime.InteropServices.ComTypes.IDataObject dataObj)
     {
-        try { return (IDataObjectAsyncCapability)(object)dataObj; }
-        catch { return null; }
+        try
+        {
+            // COM cast attempt
+            return (IDataObjectAsyncCapability)(object)dataObj;
+        }
+        catch
+        {
+            return null;
+        }
     }
 
-    // -----------------------
-    // CF_HDROP path (file list)
-    // -----------------------
-    private static string[] TryGetHDropFilePaths(System.Runtime.InteropServices.ComTypes.IDataObject dataObj)
+    private static string[] GetHDropFilePaths(System.Runtime.InteropServices.ComTypes.IDataObject dataObj)
     {
         var fmt = new FORMATETC
         {
@@ -280,11 +284,8 @@ public sealed class OutlookAsyncDropTarget : IDropTarget
             tymed = TYMED.TYMED_HGLOBAL
         };
 
-        // Avoid throwing on Classic Outlook: check first
-        int q = dataObj.QueryGetData(ref fmt);
-        if (q != 0) return Array.Empty<string>();
-
         dataObj.GetData(ref fmt, out STGMEDIUM medium);
+
         try
         {
             if (medium.tymed != TYMED.TYMED_HGLOBAL || medium.unionmember == IntPtr.Zero)
@@ -297,6 +298,7 @@ public sealed class OutlookAsyncDropTarget : IDropTarget
                 return Array.Empty<string>();
 
             var result = new string[count];
+
             for (uint i = 0; i < count; i++)
             {
                 uint len = Shell32.DragQueryFile(hDrop, i, null, 0);
@@ -305,174 +307,12 @@ public sealed class OutlookAsyncDropTarget : IDropTarget
                 result[i] = new string(buf).TrimEnd('\0');
             }
 
-            // Optional: DragFinish is typically used by the drop target when it owns HDROP.
             Shell32.DragFinish(hDrop);
-
             return result;
         }
         finally
         {
             OleHelpers.ReleaseStgMedium(ref medium);
         }
-    }
-
-    // --------------------------------------------
-    // Classic Outlook virtual files (MSG/EML) path
-    // FileGroupDescriptorW + FileContents -> temp files
-    // --------------------------------------------
-    private static string[] TryGetClassicOutlookVirtualFiles(System.Runtime.InteropServices.ComTypes.IDataObject dataObj)
-    {
-        if (CFSTR_FILEDESCRIPTORW == 0 || CFSTR_FILECONTENTS == 0)
-            return Array.Empty<string>();
-
-        // 1) Names via FileGroupDescriptorW
-        var fmtDesc = new FORMATETC
-        {
-            cfFormat = CFSTR_FILEDESCRIPTORW,
-            dwAspect = DVASPECT.DVASPECT_CONTENT,
-            lindex = -1,
-            ptd = IntPtr.Zero,
-            tymed = TYMED.TYMED_HGLOBAL
-        };
-
-        int q1 = dataObj.QueryGetData(ref fmtDesc);
-        if (q1 != 0) return Array.Empty<string>();
-
-        dataObj.GetData(ref fmtDesc, out STGMEDIUM mediumDesc);
-
-        try
-        {
-            if (mediumDesc.tymed != TYMED.TYMED_HGLOBAL || mediumDesc.unionmember == IntPtr.Zero)
-                return Array.Empty<string>();
-
-            var fileNames = ParseFileGroupDescriptorW(mediumDesc.unionmember);
-            if (fileNames.Length == 0)
-                return Array.Empty<string>();
-
-            var saved = new List<string>(fileNames.Length);
-
-            for (int i = 0; i < fileNames.Length; i++)
-            {
-                // 2) Contents via FileContents (per-index)
-                var fmtContents = new FORMATETC
-                {
-                    cfFormat = CFSTR_FILECONTENTS,
-                    dwAspect = DVASPECT.DVASPECT_CONTENT,
-                    lindex = i,
-                    ptd = IntPtr.Zero,
-                    tymed = TYMED.TYMED_ISTREAM // Outlook typically uses IStream
-                };
-
-                int q2 = dataObj.QueryGetData(ref fmtContents);
-                if (q2 != 0)
-                {
-                    // Some cases may provide TYMED_HGLOBAL; you can add that if needed.
-                    continue;
-                }
-
-                dataObj.GetData(ref fmtContents, out STGMEDIUM mediumContents);
-                try
-                {
-                    if (mediumContents.tymed != TYMED.TYMED_ISTREAM || mediumContents.unionmember == IntPtr.Zero)
-                        continue;
-
-                    var stream = (IStream)Marshal.GetObjectForIUnknown(mediumContents.unionmember);
-
-                    string safeName = SanitizeFileName(fileNames[i]);
-                    if (string.IsNullOrWhiteSpace(Path.GetExtension(safeName)))
-                    {
-                        // Classic Outlook often uses .msg
-                        safeName += ".msg";
-                    }
-
-                    string outPath = Path.Combine(
-                        Path.GetTempPath(),
-                        "outlook_drop_" + Guid.NewGuid().ToString("N") + "_" + safeName);
-
-                    SaveComIStreamToFile(stream, outPath);
-                    saved.Add(outPath);
-                }
-                finally
-                {
-                    OleHelpers.ReleaseStgMedium(ref mediumContents);
-                }
-            }
-
-            return saved.ToArray();
-        }
-        finally
-        {
-            OleHelpers.ReleaseStgMedium(ref mediumDesc);
-        }
-    }
-
-    private static string[] ParseFileGroupDescriptorW(IntPtr hGlobal)
-    {
-        IntPtr p = IntPtr.Zero;
-        try
-        {
-            p = Kernel32.GlobalLock(hGlobal);
-            if (p == IntPtr.Zero)
-                return Array.Empty<string>();
-
-            // First DWORD = number of items
-            uint count = (uint)Marshal.ReadInt32(p);
-
-            // FILEDESCRIPTORW array starts after 4 bytes
-            IntPtr first = p + 4;
-            int fdSize = Marshal.SizeOf<FILEDESCRIPTORW>();
-
-            var names = new List<string>((int)count);
-            for (int i = 0; i < count; i++)
-            {
-                IntPtr pi = first + i * fdSize;
-                var fd = Marshal.PtrToStructure<FILEDESCRIPTORW>(pi);
-                names.Add(fd.cFileName);
-            }
-            return names.ToArray();
-        }
-        finally
-        {
-            if (p != IntPtr.Zero)
-                Kernel32.GlobalUnlock(hGlobal);
-        }
-    }
-
-    private static void SaveComIStreamToFile(IStream comStream, string path)
-    {
-        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-
-        using var fs = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None);
-
-        // Read in chunks using pcbRead
-        const int BufSize = 64 * 1024;
-        byte[] buffer = new byte[BufSize];
-
-        IntPtr pcbRead = Marshal.AllocHGlobal(sizeof(int));
-        try
-        {
-            while (true)
-            {
-                Marshal.WriteInt32(pcbRead, 0);
-                comStream.Read(buffer, buffer.Length, pcbRead);
-                int read = Marshal.ReadInt32(pcbRead);
-
-                if (read <= 0)
-                    break;
-
-                fs.Write(buffer, 0, read);
-            }
-        }
-        finally
-        {
-            Marshal.FreeHGlobal(pcbRead);
-        }
-    }
-
-    private static string SanitizeFileName(string name)
-    {
-        foreach (char c in Path.GetInvalidFileNameChars())
-            name = name.Replace(c, '_');
-        return name;
     }
 }
