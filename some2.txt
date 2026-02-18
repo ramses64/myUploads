@@ -1,28 +1,153 @@
-static class ClipboardFormats
+private static string[] GetPathsFromOutlookVirtualFiles(System.Runtime.InteropServices.ComTypes.IDataObject dataObj)
 {
-    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
-    public static extern ushort RegisterClipboardFormat(string lpszFormat);
+    // 1) Get FileGroupDescriptorW (names)
+    var fmtNames = new FORMATETC
+    {
+        cfFormat = ClipboardFormats.CF_FILEDESCRIPTORW,
+        dwAspect = DVASPECT.DVASPECT_CONTENT,
+        lindex = -1,
+        ptd = IntPtr.Zero,
+        tymed = TYMED.TYMED_HGLOBAL
+    };
 
-    public static readonly short CF_FILEDESCRIPTORW = unchecked((short)RegisterClipboardFormat("FileGroupDescriptorW"));
-    public static readonly short CF_FILECONTENTS    = unchecked((short)RegisterClipboardFormat("FileContents"));
+    if (dataObj.QueryGetData(ref fmtNames) != 0)
+        return Array.Empty<string>();
+
+    dataObj.GetData(ref fmtNames, out STGMEDIUM namesMedium);
+    try
+    {
+        if (namesMedium.tymed != TYMED.TYMED_HGLOBAL || namesMedium.unionmember == IntPtr.Zero)
+            return Array.Empty<string>();
+
+        IntPtr hGlobal = namesMedium.unionmember;
+        IntPtr ptr = Kernel32.GlobalLock(hGlobal);
+        if (ptr == IntPtr.Zero) return Array.Empty<string>();
+
+        try
+        {
+            uint count = (uint)Marshal.ReadInt32(ptr);
+            if (count == 0) return Array.Empty<string>();
+
+            // FILEDESCRIPTORW array starts after uint count
+            IntPtr fdsPtr = ptr + sizeof(uint);
+            int fdSize = Marshal.SizeOf<FILEDESCRIPTORW>();
+
+            var savedPaths = new string[count];
+            string tempDir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "OutlookDrop_" + Guid.NewGuid().ToString("N"));
+            System.IO.Directory.CreateDirectory(tempDir);
+
+            for (int i = 0; i < count; i++)
+            {
+                var fd = Marshal.PtrToStructure<FILEDESCRIPTORW>(fdsPtr + i * fdSize);
+                string fileName = string.IsNullOrWhiteSpace(fd.cFileName) ? $"item_{i}.bin" : fd.cFileName;
+                string outPath = System.IO.Path.Combine(tempDir, fileName);
+
+                // 2) Get FileContents (bytes) for index i
+                var fmtContent = new FORMATETC
+                {
+                    cfFormat = ClipboardFormats.CF_FILECONTENTS,
+                    dwAspect = DVASPECT.DVASPECT_CONTENT,
+                    lindex = i,
+                    ptd = IntPtr.Zero,
+                    // Outlook often provides IStream, sometimes HGLOBAL
+                    tymed = TYMED.TYMED_ISTREAM | TYMED.TYMED_HGLOBAL
+                };
+
+                if (dataObj.QueryGetData(ref fmtContent) != 0)
+                    continue;
+
+                dataObj.GetData(ref fmtContent, out STGMEDIUM contentMedium);
+                try
+                {
+                    WriteStgMediumToFile(contentMedium, outPath);
+                    savedPaths[i] = outPath;
+                }
+                finally
+                {
+                    OleHelpers.ReleaseStgMedium(ref contentMedium);
+                }
+            }
+
+            return savedPaths.Where(p => !string.IsNullOrWhiteSpace(p)).ToArray();
+        }
+        finally
+        {
+            Kernel32.GlobalUnlock(hGlobal);
+        }
+    }
+    finally
+    {
+        OleHelpers.ReleaseStgMedium(ref namesMedium);
+    }
 }
 
-[StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
-struct FILEDESCRIPTORW
+static class Kernel32
 {
-    public uint dwFlags;
-    public Guid clsid;
-    public uint sizelcx;
-    public uint sizelcy;
-    public uint pointlx;
-    public uint pointly;
-    public uint dwFileAttributes;
-    public System.Runtime.InteropServices.ComTypes.FILETIME ftCreationTime;
-    public System.Runtime.InteropServices.ComTypes.FILETIME ftLastAccessTime;
-    public System.Runtime.InteropServices.ComTypes.FILETIME ftLastWriteTime;
-    public uint nFileSizeHigh;
-    public uint nFileSizeLow;
+    [DllImport("kernel32.dll")]
+    public static extern IntPtr GlobalLock(IntPtr hMem);
 
-    [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)]
-    public string cFileName;
+    [DllImport("kernel32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool GlobalUnlock(IntPtr hMem);
+}
+
+private static void WriteStgMediumToFile(STGMEDIUM medium, string path)
+{
+    switch (medium.tymed)
+    {
+        case TYMED.TYMED_ISTREAM:
+        {
+            var stm = (IStream)Marshal.GetObjectForIUnknown(medium.unionmember);
+            using var fs = System.IO.File.Create(path);
+            CopyIStreamToDotNetStream(stm, fs);
+            return;
+        }
+        case TYMED.TYMED_HGLOBAL:
+        {
+            // Some providers give HGLOBAL; interpret as a byte blob.
+            IntPtr ptr = Kernel32.GlobalLock(medium.unionmember);
+            if (ptr == IntPtr.Zero) throw new InvalidOperationException("GlobalLock failed.");
+
+            try
+            {
+                int size = (int)Kernel32GlobalSize(medium.unionmember);
+                byte[] bytes = new byte[size];
+                Marshal.Copy(ptr, bytes, 0, size);
+                System.IO.File.WriteAllBytes(path, bytes);
+            }
+            finally
+            {
+                Kernel32.GlobalUnlock(medium.unionmember);
+            }
+            return;
+        }
+        default:
+            throw new NotSupportedException($"Unsupported TYMED: {medium.tymed}");
+    }
+}
+
+[DllImport("kernel32.dll")]
+static extern UIntPtr GlobalSize(IntPtr hMem);
+static ulong Kernel32GlobalSize(IntPtr hMem) => GlobalSize(hMem).ToUInt64();
+
+private static void CopyIStreamToDotNetStream(IStream stm, System.IO.Stream output)
+{
+    const int bufSize = 64 * 1024;
+    byte[] buffer = new byte[bufSize];
+    IntPtr readPtr = Marshal.AllocHGlobal(sizeof(int));
+
+    try
+    {
+        while (true)
+        {
+            stm.Read(buffer, bufSize, readPtr);
+            int read = Marshal.ReadInt32(readPtr);
+            if (read <= 0) break;
+            output.Write(buffer, 0, read);
+        }
+    }
+    finally
+    {
+        Marshal.FreeHGlobal(readPtr);
+    }
 }
