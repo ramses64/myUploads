@@ -1,19 +1,272 @@
-[StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
-struct FILEDESCRIPTORW
+private static string[] GetDroppedFilesSmart(System.Runtime.InteropServices.ComTypes.IDataObject dataObj)
 {
-    public uint dwFlags;
-    public Guid clsid;
-    public uint sizelcx;
-    public uint sizelcy;
-    public uint pointlx;
-    public uint pointly;
-    public uint dwFileAttributes;
-    public FILETIME ftCreationTime;
-    public FILETIME ftLastAccessTime;
-    public FILETIME ftLastWriteTime;
-    public uint nFileSizeHigh;
-    public uint nFileSizeLow;
+    // 1) Try standard file drop first (CF_HDROP)
+    if (TryGetHDropFilePaths(dataObj, out var paths))
+        return paths;
 
-    [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)]
-    public string cFileName;
+    // 2) Fallback: classic Outlook virtual files
+    if (TryExtractVirtualFiles(dataObj, out var tempPaths))
+        return tempPaths;
+
+    return Array.Empty<string>();
+}
+
+private static bool TryGetHDropFilePaths(System.Runtime.InteropServices.ComTypes.IDataObject dataObj, out string[] paths)
+{
+    paths = Array.Empty<string>();
+
+    var fmt = new FORMATETC
+    {
+        cfFormat = Shell32.CF_HDROP,
+        dwAspect = DVASPECT.DVASPECT_CONTENT,
+        lindex = -1,
+        ptd = IntPtr.Zero,
+        tymed = TYMED.TYMED_HGLOBAL
+    };
+
+    // IMPORTANT: don’t call GetData unless it’s actually available
+    int q = dataObj.QueryGetData(ref fmt);
+    if (q != 0) return false;
+
+    dataObj.GetData(ref fmt, out STGMEDIUM medium);
+
+    try
+    {
+        if (medium.tymed != TYMED.TYMED_HGLOBAL || medium.unionmember == IntPtr.Zero)
+            return false;
+
+        IntPtr hDrop = medium.unionmember;
+
+        uint count = Shell32.DragQueryFile(hDrop, 0xFFFFFFFF, null, 0);
+        if (count == 0)
+            return false;
+
+        var result = new string[count];
+        for (uint i = 0; i < count; i++)
+        {
+            uint len = Shell32.DragQueryFile(hDrop, i, null, 0);
+            var buf = new char[len + 1];
+            Shell32.DragQueryFile(hDrop, i, buf, (uint)buf.Length);
+            result[i] = new string(buf).TrimEnd('\0');
+        }
+
+        // DragFinish is typically used by the drop target for HDROP
+        Shell32.DragFinish(hDrop);
+
+        paths = result;
+        return true;
+    }
+    finally
+    {
+        OleHelpers.ReleaseStgMedium(ref medium);
+    }
+}
+
+private static bool TryExtractVirtualFiles(System.Runtime.InteropServices.ComTypes.IDataObject dataObj, out string[] tempPaths)
+{
+    tempPaths = Array.Empty<string>();
+
+    // Registered clipboard formats for virtual file drag-drop
+    short cfFileGroupDescriptorW = unchecked((short)User32.RegisterClipboardFormat("FileGroupDescriptorW"));
+    short cfFileGroupDescriptor  = unchecked((short)User32.RegisterClipboardFormat("FileGroupDescriptor"));
+    short cfFileContents         = unchecked((short)User32.RegisterClipboardFormat("FileContents"));
+
+    // Prefer Unicode descriptor
+    List<string> fileNames;
+    if (!TryReadFileGroupDescriptor(dataObj, cfFileGroupDescriptorW, out fileNames) &&
+        !TryReadFileGroupDescriptorAnsi(dataObj, cfFileGroupDescriptor, out fileNames))
+    {
+        return false;
+    }
+
+    var outPaths = new List<string>(fileNames.Count);
+    string baseDir = Path.Combine(Path.GetTempPath(), "OutlookDrop", Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(baseDir);
+
+    for (int i = 0; i < fileNames.Count; i++)
+    {
+        string safeName = MakeSafeFileName(fileNames[i]);
+        string outPath = Path.Combine(baseDir, safeName);
+
+        if (!TryGetFileContentsToPath(dataObj, cfFileContents, i, outPath))
+            continue;
+
+        outPaths.Add(outPath);
+    }
+
+    tempPaths = outPaths.ToArray();
+    return tempPaths.Length > 0;
+}
+
+private static bool TryReadFileGroupDescriptor(System.Runtime.InteropServices.ComTypes.IDataObject dataObj, short cfFormat, out List<string> names)
+{
+    names = new List<string>();
+
+    var fmt = new FORMATETC
+    {
+        cfFormat = cfFormat,
+        dwAspect = DVASPECT.DVASPECT_CONTENT,
+        lindex = -1,
+        ptd = IntPtr.Zero,
+        tymed = TYMED.TYMED_HGLOBAL
+    };
+
+    if (dataObj.QueryGetData(ref fmt) != 0)
+        return false;
+
+    dataObj.GetData(ref fmt, out STGMEDIUM medium);
+    try
+    {
+        if (medium.tymed != TYMED.TYMED_HGLOBAL || medium.unionmember == IntPtr.Zero)
+            return false;
+
+        IntPtr p = Kernel32.GlobalLock(medium.unionmember);
+        if (p == IntPtr.Zero)
+            return false;
+
+        try
+        {
+            uint cItems = (uint)Marshal.ReadInt32(p);
+            int offset = sizeof(uint);
+            int fdSize = Marshal.SizeOf<FILEDESCRIPTORW>();
+
+            for (int i = 0; i < cItems; i++)
+            {
+                IntPtr fdPtr = IntPtr.Add(p, offset + i * fdSize);
+                var fd = Marshal.PtrToStructure<FILEDESCRIPTORW>(fdPtr);
+                names.Add(fd.cFileName);
+            }
+        }
+        finally
+        {
+            Kernel32.GlobalUnlock(medium.unionmember);
+        }
+
+        return names.Count > 0;
+    }
+    finally
+    {
+        OleHelpers.ReleaseStgMedium(ref medium);
+    }
+}
+
+// Minimal ANSI fallback (rarely needed today). You can implement this properly if you must.
+// For many cases, FileGroupDescriptorW is present.
+private static bool TryReadFileGroupDescriptorAnsi(System.Runtime.InteropServices.ComTypes.IDataObject dataObj, short cfFormat, out List<string> names)
+{
+    names = new List<string>();
+    return false;
+}
+
+private static bool TryGetFileContentsToPath(System.Runtime.InteropServices.ComTypes.IDataObject dataObj, short cfFileContents, int index, string path)
+{
+    // Outlook may return IStorage for .msg, or IStream for attachments, etc.
+    var fmt = new FORMATETC
+    {
+        cfFormat = cfFileContents,
+        dwAspect = DVASPECT.DVASPECT_CONTENT,
+        lindex = index,
+        ptd = IntPtr.Zero,
+        tymed = TYMED.TYMED_ISTORAGE | TYMED.TYMED_ISTREAM | TYMED.TYMED_HGLOBAL
+    };
+
+    if (dataObj.QueryGetData(ref fmt) != 0)
+        return false;
+
+    dataObj.GetData(ref fmt, out STGMEDIUM medium);
+    try
+    {
+        if (medium.unionmember == IntPtr.Zero)
+            return false;
+
+        if (medium.tymed == TYMED.TYMED_ISTORAGE)
+        {
+            var storage = (IStorage)Marshal.GetObjectForIUnknown(medium.unionmember);
+            try
+            {
+                StructuredStorage.SaveIStorageToFile(storage, path);
+                return true;
+            }
+            finally
+            {
+                Marshal.ReleaseComObject(storage);
+            }
+        }
+        else if (medium.tymed == TYMED.TYMED_ISTREAM)
+        {
+            var comStream = (IStream)Marshal.GetObjectForIUnknown(medium.unionmember);
+            try
+            {
+                SaveComIStreamToFile(comStream, path);
+                return true;
+            }
+            finally
+            {
+                Marshal.ReleaseComObject(comStream);
+            }
+        }
+        else if (medium.tymed == TYMED.TYMED_HGLOBAL)
+        {
+            // Some sources provide bytes in HGLOBAL
+            IntPtr p = Kernel32.GlobalLock(medium.unionmember);
+            if (p == IntPtr.Zero) return false;
+
+            try
+            {
+                // No size is provided here; HGLOBAL file contents is less common for Outlook.
+                // If you need this, add GlobalSize and copy that many bytes.
+                return false;
+            }
+            finally
+            {
+                Kernel32.GlobalUnlock(medium.unionmember);
+            }
+        }
+
+        return false;
+    }
+    finally
+    {
+        OleHelpers.ReleaseStgMedium(ref medium);
+    }
+}
+
+private static void SaveComIStreamToFile(IStream stream, string path)
+{
+    using var fs = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None);
+    byte[] buffer = new byte[64 * 1024];
+
+    while (true)
+    {
+        stream.Read(buffer, buffer.Length, IntPtr.Zero);
+
+        // ComTypes.IStream.Read doesn’t directly tell bytes read unless you pass a pointer.
+        // Use an IntPtr to retrieve bytes read:
+        int read;
+        IntPtr pcbRead = Marshal.AllocHGlobal(sizeof(int));
+        try
+        {
+            Marshal.WriteInt32(pcbRead, 0);
+            stream.Read(buffer, buffer.Length, pcbRead);
+            read = Marshal.ReadInt32(pcbRead);
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(pcbRead);
+        }
+
+        if (read <= 0) break;
+        fs.Write(buffer, 0, read);
+    }
+}
+
+private static string MakeSafeFileName(string name)
+{
+    foreach (var c in Path.GetInvalidFileNameChars())
+        name = name.Replace(c, '_');
+
+    if (string.IsNullOrWhiteSpace(name))
+        name = "drop.bin";
+
+    return name;
 }
