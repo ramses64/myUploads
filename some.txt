@@ -1,18 +1,16 @@
-private static uint ChooseEffect(uint allowedBySource, uint keyState)
-{
-    const uint DROPEFFECT_NONE = 0;
-    const uint DROPEFFECT_COPY = 1;
-    const uint DROPEFFECT_MOVE = 2;
+    uint allowed = pdwEffect;
 
-    bool ctrl = (keyState & 0x0008) != 0; // MK_CONTROL
-
-    // prefer Copy when CTRL is down, otherwise Move (typical behavior)
-    if (ctrl && (allowedBySource & DROPEFFECT_COPY) != 0) return DROPEFFECT_COPY;
-    if (!ctrl && (allowedBySource & DROPEFFECT_MOVE) != 0) return DROPEFFECT_MOVE;
-
-    // fallback: any allowed effect
-    if ((allowedBySource & DROPEFFECT_COPY) != 0) return DROPEFFECT_COPY;
-    if ((allowedBySource & DROPEFFECT_MOVE) != 0) return DROPEFFECT_MOVE;
-
-    return DROPEFFECT_NONE;
-}
+    // If COPY is allowed, prefer COPY
+    if ((allowed & Ole32.DROPEFFECT_COPY) != 0)
+    {
+        pdwEffect = Ole32.DROPEFFECT_COPY;
+    }
+    else if ((allowed & 2) != 0) // DROPEFFECT_MOVE
+    {
+        pdwEffect = 2;
+    }
+    else
+    {
+        pdwEffect = 0; // DROPEFFECT_NONE
+        return;
+    }
