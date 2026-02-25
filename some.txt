@@ -1,47 +1,17 @@
-private const short CF_UNICODETEXT = 13; // Win32 clipboard constant
-
-private static bool TryGetUnicodeText(
-    System.Runtime.InteropServices.ComTypes.IDataObject dataObj,
-    out string text)
+private static uint ChooseEffect(uint grfKeyState, uint allowedEffects)
 {
-    text = string.Empty;
+    const uint MK_CONTROL = 0x0008; // Ctrl pressed
+    bool ctrl = (grfKeyState & MK_CONTROL) != 0;
 
-    var fmt = new FORMATETC
-    {
-        cfFormat = CF_UNICODETEXT,
-        dwAspect = DVASPECT.DVASPECT_CONTENT,
-        lindex = -1,
-        ptd = IntPtr.Zero,
-        tymed = TYMED.TYMED_HGLOBAL
-    };
+    // prefer COPY when Ctrl is pressed, otherwise MOVE
+    if (ctrl && (allowedEffects & 1 /*COPY*/) != 0)
+        return 1; // DROPEFFECT_COPY
 
-    if (dataObj.QueryGetData(ref fmt) != 0)
-        return false;
+    if ((allowedEffects & 2 /*MOVE*/) != 0)
+        return 2; // DROPEFFECT_MOVE
 
-    dataObj.GetData(ref fmt, out STGMEDIUM medium);
+    if ((allowedEffects & 1 /*COPY*/) != 0)
+        return 1; // fallback to copy
 
-    try
-    {
-        if (medium.tymed != TYMED.TYMED_HGLOBAL || medium.unionmember == IntPtr.Zero)
-            return false;
-
-        IntPtr p = Kernel32.GlobalLock(medium.unionmember);
-        if (p == IntPtr.Zero)
-            return false;
-
-        try
-        {
-            // HGLOBAL contains a null-terminated UTF-16 string
-            text = Marshal.PtrToStringUni(p) ?? string.Empty;
-            return !string.IsNullOrWhiteSpace(text);
-        }
-        finally
-        {
-            Kernel32.GlobalUnlock(medium.unionmember);
-        }
-    }
-    finally
-    {
-        OleHelpers.ReleaseStgMedium(ref medium);
-    }
+    return 0; // DROPEFFECT_NONE
 }
