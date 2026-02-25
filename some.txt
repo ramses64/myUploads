@@ -1,17 +1,18 @@
-private static uint ChooseEffect(uint grfKeyState, uint allowedEffects)
+private static uint ChooseEffect(uint allowedBySource, uint keyState)
 {
-    const uint MK_CONTROL = 0x0008; // Ctrl pressed
-    bool ctrl = (grfKeyState & MK_CONTROL) != 0;
+    const uint DROPEFFECT_NONE = 0;
+    const uint DROPEFFECT_COPY = 1;
+    const uint DROPEFFECT_MOVE = 2;
 
-    // prefer COPY when Ctrl is pressed, otherwise MOVE
-    if (ctrl && (allowedEffects & 1 /*COPY*/) != 0)
-        return 1; // DROPEFFECT_COPY
+    bool ctrl = (keyState & 0x0008) != 0; // MK_CONTROL
 
-    if ((allowedEffects & 2 /*MOVE*/) != 0)
-        return 2; // DROPEFFECT_MOVE
+    // prefer Copy when CTRL is down, otherwise Move (typical behavior)
+    if (ctrl && (allowedBySource & DROPEFFECT_COPY) != 0) return DROPEFFECT_COPY;
+    if (!ctrl && (allowedBySource & DROPEFFECT_MOVE) != 0) return DROPEFFECT_MOVE;
 
-    if ((allowedEffects & 1 /*COPY*/) != 0)
-        return 1; // fallback to copy
+    // fallback: any allowed effect
+    if ((allowedBySource & DROPEFFECT_COPY) != 0) return DROPEFFECT_COPY;
+    if ((allowedBySource & DROPEFFECT_MOVE) != 0) return DROPEFFECT_MOVE;
 
-    return 0; // DROPEFFECT_NONE
+    return DROPEFFECT_NONE;
 }
