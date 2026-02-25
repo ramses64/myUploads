@@ -1,22 +1,12 @@
-private static string GetUniquePath(string baseDir, string fileName, HashSet<string> usedNames)
+var used = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+for (int i = 0; i < fileNames.Count; i++)
 {
-    // Make sure the name is safe; also handle empty names
-    fileName = MakeSafeFileName(fileName);
-    if (string.IsNullOrWhiteSpace(fileName))
-        fileName = "drop.msg";
+    // If Outlook returns the same filename for all items, this makes them unique.
+    string outPath = GetUniquePath(baseDir, fileNames[i], used);
 
-    string nameWithoutExt = Path.GetFileNameWithoutExtension(fileName);
-    string ext = Path.GetExtension(fileName);
+    if (!TryGetFileContentsToPath(dataObj, cfFileContents, i, outPath))
+        continue;
 
-    string candidate = fileName;
-    int n = 1;
-
-    while (usedNames.Contains(candidate) || File.Exists(Path.Combine(baseDir, candidate)))
-    {
-        n++;
-        candidate = $"{nameWithoutExt} ({n}){ext}";
-    }
-
-    usedNames.Add(candidate);
-    return Path.Combine(baseDir, candidate);
+    outPaths.Add(outPath);
 }
