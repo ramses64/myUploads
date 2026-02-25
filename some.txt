@@ -1,16 +1,22 @@
-    uint allowed = pdwEffect;
+private static string GetUniquePath(string baseDir, string fileName, HashSet<string> usedNames)
+{
+    // Make sure the name is safe; also handle empty names
+    fileName = MakeSafeFileName(fileName);
+    if (string.IsNullOrWhiteSpace(fileName))
+        fileName = "drop.msg";
 
-    // If COPY is allowed, prefer COPY
-    if ((allowed & Ole32.DROPEFFECT_COPY) != 0)
+    string nameWithoutExt = Path.GetFileNameWithoutExtension(fileName);
+    string ext = Path.GetExtension(fileName);
+
+    string candidate = fileName;
+    int n = 1;
+
+    while (usedNames.Contains(candidate) || File.Exists(Path.Combine(baseDir, candidate)))
     {
-        pdwEffect = Ole32.DROPEFFECT_COPY;
+        n++;
+        candidate = $"{nameWithoutExt} ({n}){ext}";
     }
-    else if ((allowed & 2) != 0) // DROPEFFECT_MOVE
-    {
-        pdwEffect = 2;
-    }
-    else
-    {
-        pdwEffect = 0; // DROPEFFECT_NONE
-        return;
-    }
+
+    usedNames.Add(candidate);
+    return Path.Combine(baseDir, candidate);
+}
