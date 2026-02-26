@@ -1,12 +1,20 @@
-var used = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-for (int i = 0; i < fileNames.Count; i++)
+private async Task OnNativeDropAsync(string[] paths, Point screenPt)
 {
-    // If Outlook returns the same filename for all items, this makes them unique.
-    string outPath = GetUniquePath(baseDir, fileNames[i], used);
+    // Ensure UI thread (WinForms equivalent of Dispatcher)
+    if (InvokeRequired)
+    {
+        await (Task)Invoke(new Func<Task>(() => OnNativeDropAsync(paths, screenPt)));
+        return;
+    }
 
-    if (!TryGetFileContentsToPath(dataObj, cfFileContents, i, outPath))
-        continue;
+    var clientPt = this.PointToClient(screenPt);
 
-    outPaths.Add(outPath);
+    Control? hit = DeepHitTest(this, clientPt);
+    if (hit == null) return;
+
+    var handler = FindDropHandler(hit);
+    if (handler == null) return;
+
+    var container = await DragDropHandler.CreateFromFilePaths(paths);
+    await handler.HandleNativeDropAsync(container);
 }
