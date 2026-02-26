@@ -1,18 +1,17 @@
-private static Control? DeepHitTest(Control root, Point clientPt)
+private static INativeDropHandler? FindDropHandler(Control? start)
 {
-    // clientPt is in root's coordinate system
-    Control? child = root.GetChildAtPoint(clientPt, GetChildAtPointSkip.Invisible);
-
-    while (child != null)
+    Control? current = start;
+    while (current != null)
     {
-        // Convert point into the child's coordinate system
-        clientPt = new Point(clientPt.X - child.Left, clientPt.Y - child.Top);
+        // If the control itself implements the handler
+        if (current is INativeDropHandler h)
+            return h;
 
-        var next = child.GetChildAtPoint(clientPt, GetChildAtPointSkip.Invisible);
-        if (next == null) return child;
+        // Optional: if you attach a handler object via Tag
+        if (current.Tag is INativeDropHandler tagHandler)
+            return tagHandler;
 
-        child = next;
+        current = current.Parent;
     }
-
-    return root; // fallback: root control itself
+    return null;
 }
