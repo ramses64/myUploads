@@ -1,20 +1,18 @@
-private async Task OnNativeDropAsync(string[] paths, Point screenPt)
+private static Control? DeepHitTest(Control root, Point clientPt)
 {
-    // Ensure UI thread (WinForms equivalent of Dispatcher)
-    if (InvokeRequired)
+    // clientPt is in root's coordinate system
+    Control? child = root.GetChildAtPoint(clientPt, GetChildAtPointSkip.Invisible);
+
+    while (child != null)
     {
-        await (Task)Invoke(new Func<Task>(() => OnNativeDropAsync(paths, screenPt)));
-        return;
+        // Convert point into the child's coordinate system
+        clientPt = new Point(clientPt.X - child.Left, clientPt.Y - child.Top);
+
+        var next = child.GetChildAtPoint(clientPt, GetChildAtPointSkip.Invisible);
+        if (next == null) return child;
+
+        child = next;
     }
 
-    var clientPt = this.PointToClient(screenPt);
-
-    Control? hit = DeepHitTest(this, clientPt);
-    if (hit == null) return;
-
-    var handler = FindDropHandler(hit);
-    if (handler == null) return;
-
-    var container = await DragDropHandler.CreateFromFilePaths(paths);
-    await handler.HandleNativeDropAsync(container);
+    return root; // fallback: root control itself
 }
